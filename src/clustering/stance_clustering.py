@@ -14,9 +14,12 @@ from IPython import embed
 import sys
 import pickle
 
-sys.path.append('../modeling')
-import input_models as im
-import datasets, data_utils
+from src.modeling import datasets, data_utils
+
+# sys.path.append('../modeling')
+import src.modeling.input_models as im
+
+# import datasets, data_utils
 
 use_cuda = torch.cuda.is_available()
 SEED = 4783
@@ -40,9 +43,10 @@ def get_features(corpus):
     vectorizer = TfidfVectorizer()
     vectorizer.fit(corpus)
     word2idf = dict()
-    for w,i in vectorizer.vocabulary_.items():
+    for w, i in vectorizer.vocabulary_.items():
         word2idf[w] = vectorizer.idf_[i]
     return word2idf
+
 
 def combine_word_piece_tokens(word_toks, word2tfidf):
     # join the BERT word-piece tokens
@@ -203,7 +207,7 @@ def cluster(dataname, trn_X, trn_Y, dev_X, dev_Y, k, trial_num, link_type='ward'
     print("[{}] saved to {}".format(trial_num, trn_oname))
 
     print("[{}] fitting centroid classifier ...".format(trial_num))
-    clf  = NearestCentroid()
+    clf = NearestCentroid()
     clf.fit(trn_X, labels)
     print("[{}] finished fitting classifier.".format(trial_num))
     cen_oname = '../../resources/topicreps/{}_{}_{}_{}.centroids.npy'.format(dataname, link_type, m, k)
@@ -233,7 +237,7 @@ def calculate_sse(centroids, dev_X, dev_labels):
 
 
 def get_cluster_labels(dataname, k, X, Y, s):
-    trn_centroids = np.load('../../resources/topicreps/{}_ward_euclidean_{}.centroids.npy'.format(dataname, k))
+    trn_centroids = np.load(f"../../resources/topicreps/{dataname}_ward_euclidean_{k}.centroids.npy")
     classes = np.array([i for i in range(len(trn_centroids))])
 
     clf = NearestCentroid()
@@ -280,8 +284,8 @@ if __name__ == '__main__':
     dev_dataloader = data_utils.DataSampler(dev_data, batch_size=64, shuffle=False)
 
     if args['test_data'] is not None:
-        test_data = datasets.StanceData(args['test_data'],None, max_tok_len=200,
-                                       max_top_len=5, is_bert=True, add_special_tokens=True)
+        test_data = datasets.StanceData(args['test_data'], None, max_tok_len=200,
+                                        max_top_len=5, is_bert=True, add_special_tokens=True)
         test_dataloader = data_utils.DataSampler(test_data, batch_size=64, shuffle=False)
 
     if args['mode'] == '1':
@@ -350,5 +354,3 @@ if __name__ == '__main__':
 
     else:
         print("doing nothing.")
-
-

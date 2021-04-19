@@ -1,9 +1,7 @@
 import numpy as np
 import torch, os, sys, argparse
 sys.path.append('./modeling')
-import models as bm
-import data_utils, model_utils, datasets
-import input_models as im
+from modeling import data_utils, model_utils, datasets, input_models as im, models as bm
 import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
@@ -12,6 +10,7 @@ VECTOR_NAME = 'glove.6B.100d'
 SEED = 0
 NUM_GPUS = None
 use_cuda = torch.cuda.is_available()
+
 
 def eval(model_handler, dev_data, class_wise=False, is_test=False, correct_preds=False):
     '''
@@ -35,15 +34,15 @@ def eval(model_handler, dev_data, class_wise=False, is_test=False, correct_preds
 
 
 def save_predictions(model_handler, dev_data, out_name, is_test=False, correct_preds=False):
-    trn_preds, _, _, _ = model_handler.predict()
+    # trn_preds, _, _, _ = model_handler.predict()
     dev_preds, _, _, _ = model_handler.predict(data=dev_data, correct_preds=correct_preds)
     if is_test:
         dev_name = 'test'
     else:
         dev_name = 'dev'
 
-    predict_helper(trn_preds, model_handler.dataloader.data).to_csv(out_name + '-train.csv', index=False)
-    print("saved to {}-train.csv".format(out_name))
+    # predict_helper(trn_preds, model_handler.dataloader.data).to_csv(out_name + '-train.csv', index=False)
+    # print("saved to {}-train.csv".format(out_name))
     predict_helper(dev_preds, dev_data.data).to_csv(out_name + '-{}.csv'.format(dev_name), index=False)
     print("saved to {}-{}.csv".format(out_name, dev_name))
 
@@ -101,11 +100,13 @@ if __name__ == '__main__':
 
         if 'test' in args['dev_data']:
             dev_s = 'test'
-        else:
+        elif "dev" in args["dev_data"]:
             dev_s = 'dev'
-        dev_data_kwargs['topic_rep_dict'] = '{}/{}-{}.labels.pkl'.format(config['topic_path'],
-                                                                          config['topic_name'],
-                                                                         dev_s)
+        else:
+            dev_s = None
+
+        if dev_s is not None:
+            dev_data_kwargs['topic_rep_dict'] = f"{config['topic_path']}/{config['topic_name']}-{dev_s}.labels.pkl"
 
     #############
     # LOAD DATA #

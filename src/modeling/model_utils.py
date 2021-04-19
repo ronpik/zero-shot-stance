@@ -2,6 +2,7 @@ import torch, data_utils, pickle, time, json, copy
 from sklearn.metrics import f1_score, precision_score, recall_score
 import numpy as np
 import torch.nn as nn
+from tqdm import tqdm
 
 
 class ModelHandler:
@@ -231,7 +232,7 @@ class TorchModelHandler:
                         the final checkpoint for the model of this' name.
         '''
         filename = filename.replace('[NAME]', self.name)
-        checkpoint = torch.load(filename)
+        checkpoint = torch.load(filename, map_location=torch.device('cpu'))
         self.model.load_state_dict(checkpoint['model_state_dict'])
 
     def train_step(self):
@@ -317,7 +318,7 @@ class TorchModelHandler:
             data = self.dataloader
 
         t2pred = dict()
-        for sample_batched in data:
+        for sample_batched in tqdm(data):
 
             with torch.no_grad():
                 y_pred, labels = self.get_pred_noupdate(sample_batched)
