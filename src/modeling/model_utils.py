@@ -1,4 +1,4 @@
-import torch, data_utils, pickle, time, json, copy
+import torch, pickle, time, json, copy
 from sklearn.metrics import f1_score, precision_score, recall_score
 import numpy as np
 import torch.nn as nn

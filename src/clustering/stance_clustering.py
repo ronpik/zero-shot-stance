@@ -1,3 +1,5 @@
+from typing import List
+
 import torch
 import numpy as np
 import argparse
@@ -21,25 +23,40 @@ import src.modeling.input_models as im
 
 # import datasets, data_utils
 
+# type aliases
+Corpus = List[str]
+
 use_cuda = torch.cuda.is_available()
 SEED = 4783
 
 
-def load_data(train_data, id_col='ori_id'):
-    df = pd.read_csv(train_data)
+def load_data(train_path: str, id_col="ori_id", text_col="text_s") -> Corpus:
+    """
+    Reads from train_path the text of each record, and return a list of the corresponding texts.
+    :param train_path: path to train data
+    :param id_col: the column containing the record ID
+    :param text_col: the column containing the text
+    :return: list of records' texts
+    """
+    df = pd.read_csv(train_path)
 
     seen_ids = set()
     corpus = []
     for i in df.index:
         row = df.iloc[i]
-        if row[id_col] in seen_ids: continue
-        corpus.append(row['text_s'])
-        seen_ids.add(row[id_col])
+        if row[id_col] not in seen_ids:
+            corpus.append(row[text_col])
+            seen_ids.add(row[id_col])
 
     return corpus
 
 
-def get_features(corpus):
+def get_features(corpus: Corpus):
+    """
+    calculates the idf value of words from corpus.
+    :param corpus: sequence of texts.
+    :return: A mapping between words to their idf value according to corpus.
+    """
     vectorizer = TfidfVectorizer()
     vectorizer.fit(corpus)
     word2idf = dict()
@@ -48,25 +65,31 @@ def get_features(corpus):
     return word2idf
 
 
-def combine_word_piece_tokens(word_toks, word2tfidf):
+def combine_word_piece_tokens(word_tokens, word2tfidf):
+    """
+
+    :param word_tokens:
+    :param word2tfidf:
+    :return:
+    """
     # join the BERT word-piece tokens
-    new_word_toks = []
-    for tok_lst in word_toks:
+    new_word_tokens = []
+    for token_list in word_tokens:
         word2pieces = dict()
         i = 0
-        new_tok_lst = []
-        while i < len(tok_lst):
-            w = tok_lst[i]
+        new_token_list = []
+        while i < len(token_list):
+            w = token_list[i]
             if not w.startswith('##'):
-                new_tok_lst.append(w)
+                new_token_list.append(w)
             else:
-                old_word = new_tok_lst.pop(-1)
+                old_word = new_token_list.pop(-1)
                 new_w = old_word + w.strip("##")
-                new_tok_lst.append(new_w)
+                new_token_list.append(new_w)
 
                 word2pieces[new_w] = [old_word, w]
             i += 1
-        new_word_toks.append(new_tok_lst)
+        new_word_tokens.append(new_token_list)
 
         for w, p_lst in word2pieces.items():
             if w not in word2tfidf:
@@ -83,12 +106,12 @@ def combine_word_piece_tokens(word_toks, word2tfidf):
                 if wp not in word2tfidf:
                     word2tfidf[wp] = word2tfidf[w]
 
-    return new_word_toks
+    return new_word_tokens
 
 
-def get_tfidf_weights(new_word_toks, vecs, word2tfidf):
+def get_tfidf_weights(new_word_tokens, vecs, word2tfidf):
     tfidf_lst = []
-    for toklst in new_word_toks:  # word_toks:
+    for toklst in new_word_tokens:  # word_tokens:
         temp = []
         for w in toklst:
             temp.append(word2tfidf.get(w, 0.))
@@ -113,14 +136,14 @@ def save_bert_vectors(embed_model, dataloader, batching_fn, batching_kwargs, wor
             args.update(embed_args)
 
             vecs = args['txt_E']  # (B, L, 768)
-            word_toks = [dataloader.data.tokenizer.convert_ids_to_tokens(args['text'][i],
+            word_tokens = [dataloader.data.tokenizer.convert_ids_to_tokens(args['text'][i],
                                                                          skip_special_tokens=True)
                          for i in range(args['text'].shape[0])]
 
             # join the BERT word-piece tokens
-            new_word_toks = combine_word_piece_tokens(word_toks, word2tfidf)
+            new_word_tokens = combine_word_piece_tokens(word_tokens, word2tfidf)
 
-            tfidf_lst = get_tfidf_weights(new_word_toks, vecs, word2tfidf)
+            tfidf_lst = get_tfidf_weights(new_word_tokens, vecs, word2tfidf)
 
             tfidf_weights = torch.tensor(tfidf_lst, device=('cuda' if use_cuda else 'cpu'))  # (B, L)
             tfidf_weights = tfidf_weights.unsqueeze(2).repeat(1, 1, vecs.shape[2])
@@ -190,25 +213,25 @@ def load_vector_data(p, docname, topicname, dataname, dataloader, mode='concat')
     return np.array(dataX), dataY
 
 
-def cluster(dataname, trn_X, trn_Y, dev_X, dev_Y, k, trial_num, link_type='ward', m='euclidean'):
+def cluster(dataname, train_X, train_Y, dev_X, dev_Y, k, trial_num, link_type='ward', m='euclidean'):
     print("[{}] clustering with: linkage={}, m={}, n_clusters={}...".format(trial_num, link_type, m, k))
     clustering = AgglomerativeClustering(n_clusters=k, linkage=link_type, affinity=m)
     # clustering = KMeans(n_clusters=k)
-    clustering.fit(trn_X)
+    clustering.fit(train_X)
     labels = clustering.labels_
     print('[{}] finished clustering.'.format(trial_num))
 
     ## labels: new_id -> cluster_number
-    trn_id2i = dict()
-    for rid, eid in trn_Y.items():
-        trn_id2i[rid] = labels[eid]
-    trn_oname = '../../resources/topicreps/{}_{}_{}_{}-train.labels.pkl'.format(dataname, link_type, m, k)
-    pickle.dump(trn_id2i, open(trn_oname, 'wb'))
-    print("[{}] saved to {}".format(trial_num, trn_oname))
+    train_id2i = dict()
+    for rid, eid in train_Y.items():
+        train_id2i[rid] = labels[eid]
+    train_oname = '../../resources/topicreps/{}_{}_{}_{}-train.labels.pkl'.format(dataname, link_type, m, k)
+    pickle.dump(train_id2i, open(train_oname, 'wb'))
+    print("[{}] saved to {}".format(trial_num, train_oname))
 
     print("[{}] fitting centroid classifier ...".format(trial_num))
     clf = NearestCentroid()
-    clf.fit(trn_X, labels)
+    clf.fit(train_X, labels)
     print("[{}] finished fitting classifier.".format(trial_num))
     cen_oname = '../../resources/topicreps/{}_{}_{}_{}.centroids.npy'.format(dataname, link_type, m, k)
     np.save(cen_oname, clf.centroids_)
@@ -237,11 +260,11 @@ def calculate_sse(centroids, dev_X, dev_labels):
 
 
 def get_cluster_labels(dataname, k, X, Y, s):
-    trn_centroids = np.load(f"../../resources/topicreps/{dataname}_ward_euclidean_{k}.centroids.npy")
-    classes = np.array([i for i in range(len(trn_centroids))])
+    train_centroids = np.load(f"../../resources/topicreps/{dataname}_ward_euclidean_{k}.centroids.npy")
+    classes = np.array([i for i in range(len(train_centroids))])
 
     clf = NearestCentroid()
-    clf.centroids_ = trn_centroids
+    clf.centroids_ = train_centroids
     clf.classes_ = classes
 
     labels = clf.predict(X)
@@ -256,7 +279,7 @@ def get_cluster_labels(dataname, k, X, Y, s):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--mode', help='What to do', required=True)
-    parser.add_argument('-i', '--trn_data', help='Name of the training data file', required=False)
+    parser.add_argument('-i', '--train_data', help='Name of the training data file', required=False)
     parser.add_argument('-d', '--dev_data', help='Name of the dev data file', required=False)
     parser.add_argument('-e', '--test_data', help='Name of the test data file', required=False,
                         default=None)
@@ -275,16 +298,16 @@ if __name__ == '__main__':
     torch.cuda.manual_seed_all(SEED)
     torch.backends.cudnn.deterministic = True
 
-    data = datasets.StanceData(args['trn_data'], None, max_tok_len=200, max_top_len=5, is_bert=True,
+    data = datasets.StanceData(args['train_data'], None, max_token_len=200, max_top_len=5, is_bert=True,
                                add_special_tokens=True)
     dataloader = data_utils.DataSampler(data, batch_size=64, shuffle=False)
 
-    dev_data = datasets.StanceData(args['dev_data'], None, max_tok_len=200,
+    dev_data = datasets.StanceData(args['dev_data'], None, max_token_len=200,
                                    max_top_len=5, is_bert=True, add_special_tokens=True)
     dev_dataloader = data_utils.DataSampler(dev_data, batch_size=64, shuffle=False)
 
     if args['test_data'] is not None:
-        test_data = datasets.StanceData(args['test_data'], None, max_tok_len=200,
+        test_data = datasets.StanceData(args['test_data'], None, max_token_len=200,
                                         max_top_len=5, is_bert=True, add_special_tokens=True)
         test_dataloader = data_utils.DataSampler(test_data, batch_size=64, shuffle=False)
 
@@ -296,7 +319,7 @@ if __name__ == '__main__':
         batching_fn = data_utils.prepare_batch
         batch_args = {'keep_sen': False}
 
-        corpus = load_data(args['trn_data'])
+        corpus = load_data(args['train_data'])
         word2tfidf = get_features(corpus)
 
         save_bert_vectors(input_layer, dataloader, batching_fn, batch_args, word2tfidf, 'train')
@@ -307,7 +330,7 @@ if __name__ == '__main__':
 
     elif args['mode'] == '2':
         print("Clustering")
-        trn_X, trn_Y = load_vector_data(args['data_path'], docname=args['doc_name'], topicname=args['topic_name'],
+        train_X, train_Y = load_vector_data(args['data_path'], docname=args['doc_name'], topicname=args['topic_name'],
                                         dataname='train', dataloader=dataloader, mode='concat')
         dev_X, dev_Y = load_vector_data(args['data_path'], docname=args['doc_name'], topicname=args['topic_name'],
                                         dataname='dev', dataloader=dev_dataloader, mode='concat')
@@ -322,7 +345,7 @@ if __name__ == '__main__':
                 while k in tried_v:
                     k = np.random.randint(int(min_v), int(max_v) + 1)
 
-                sse = cluster(args['file_name'], trn_X, trn_Y, dev_X, dev_Y, k, trial_num)
+                sse = cluster(args['file_name'], train_X, train_Y, dev_X, dev_Y, k, trial_num)
 
                 sse_lst.append(sse)
                 k_lst.append(k)
@@ -334,7 +357,7 @@ if __name__ == '__main__':
             plt.plot(sorted_k, sorted_sse, 'go--')
             plt.savefig('../../resources/topicreps/SSE_clusters_{}.png'.format(args['file_name']))
         else:
-            cluster(args['file_name'], trn_X, trn_Y, dev_X, dev_Y, int(args['k']), 0)
+            cluster(args['file_name'], train_X, train_Y, dev_X, dev_Y, int(args['k']), 0)
 
     elif args['mode'] == '3':
         print("Getting cluster assignments")

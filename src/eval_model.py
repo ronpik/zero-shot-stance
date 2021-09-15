@@ -34,14 +34,14 @@ def eval(model_handler, dev_data, class_wise=False, is_test=False, correct_preds
 
 
 def save_predictions(model_handler, dev_data, out_name, is_test=False, correct_preds=False):
-    # trn_preds, _, _, _ = model_handler.predict()
+    # train_preds, _, _, _ = model_handler.predict()
     dev_preds, _, _, _ = model_handler.predict(data=dev_data, correct_preds=correct_preds)
     if is_test:
         dev_name = 'test'
     else:
         dev_name = 'dev'
 
-    # predict_helper(trn_preds, model_handler.dataloader.data).to_csv(out_name + '-train.csv', index=False)
+    # predict_helper(train_preds, model_handler.dataloader.data).to_csv(out_name + '-train.csv', index=False)
     # print("saved to {}-train.csv".format(out_name))
     predict_helper(dev_preds, dev_data.data).to_csv(out_name + '-{}.csv'.format(dev_name), index=False)
     print("saved to {}-{}.csv".format(out_name, dev_name))
@@ -66,7 +66,7 @@ if __name__ == '__main__':
     '''
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--config_file', help='Name of the cofig data file', required=False)
-    parser.add_argument('-i', '--trn_data', help='Name of the training data file', required=False)
+    parser.add_argument('-i', '--train_data', help='Name of the training data file', required=False)
     parser.add_argument('-d', '--dev_data', help='Name of the dev data file', default=None, required=False)
     parser.add_argument('-k', '--ckp_name', help='Checkpoint name', required=False)
     parser.add_argument('-m', '--mode', help='What to do', required=True)
@@ -88,14 +88,14 @@ if __name__ == '__main__':
         for l in f.readlines():
             config[l.strip().split(":")[0]] = l.strip().split(":")[1]
 
-    trn_data_kwargs = {}
+    train_data_kwargs = {}
     dev_data_kwargs = {}
 
     if 'topic_name' in config:
         topic_vecs = np.load('{}/{}.{}.npy'.format(config['topic_path'],
                                                    config['topic_name'],
                                                    config.get('rep_v', 'centroids')))
-        trn_data_kwargs['topic_rep_dict'] = '{}/{}-train.labels.pkl'.format(config['topic_path'],
+        train_data_kwargs['topic_rep_dict'] = '{}/{}-train.labels.pkl'.format(config['topic_path'],
                                                                             config['topic_name'])
 
         if 'test' in args['dev_data']:
@@ -125,16 +125,16 @@ if __name__ == '__main__':
         vecs = data_utils.load_vectors('../resources/{}.vectors.npy'.format(vec_name),
                                        dim=vec_dim, seed=SEED)
         vocab_name = '../resources/{}.vocab.pkl'.format(vec_name)
-        data = datasets.StanceData(args['trn_data'], vocab_name, pad_val=len(vecs) - 1,
+        data = datasets.StanceData(args['train_data'], vocab_name, pad_val=len(vecs) - 1,
                                    max_tok_len=int(config.get('max_tok_len', '200')),
                                    max_sen_len=int(config.get('max_sen_len', '10')),
                                    keep_sen=('keep_sen' in config),
-                                   **trn_data_kwargs)
+                                   **train_data_kwargs)
     else:
-        data = datasets.StanceData(args['trn_data'], None, max_tok_len=config['max_tok_len'],
+        data = datasets.StanceData(args['train_data'], None, max_tok_len=config['max_tok_len'],
                                    max_top_len=config['max_top_len'], is_bert=True,
                                    add_special_tokens=(config.get('together_in', '0') == '0'),
-                                   **trn_data_kwargs)
+                                   **train_data_kwargs)
 
     dataloader = data_utils.DataSampler(data, batch_size=int(config['b']))
 

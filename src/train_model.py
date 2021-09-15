@@ -1,9 +1,6 @@
 import numpy as np
-import torch, sys, argparse, time
-sys.path.append('./modeling')
-import models as bm
-import data_utils, model_utils, datasets
-import input_models as im
+import torch, argparse, time
+from modeling import data_utils, model_utils, datasets, input_models as im, models as bm
 import torch.optim as optim
 import torch.nn as nn
 
@@ -37,13 +34,13 @@ def train(model_handler, num_epochs, verbose=True, dev_data=None,
                 # eval model on training data
                 if not is_bert:
                     # don't do train eval if bert, because super slow
-                    trn_scores = model_handler.eval_and_print(data_name='TRAIN')
+                    train_scores = model_handler.eval_and_print(data_name='TRAIN')
                 # update best scores
                 if dev_data is not None:
                     dev_scores = model_handler.eval_and_print(data=dev_data, data_name='DEV')
                     model_handler.save_best(scores=dev_scores)
                 else:
-                    model_handler.save_best(scores=trn_scores)
+                    model_handler.save_best(scores=train_scores)
             if early_stopping:
                 l = model_handler.loss # will be dev loss because evaled last
                 if l < prev_dev_loss:
@@ -69,7 +66,7 @@ def train(model_handler, num_epochs, verbose=True, dev_data=None,
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--config_file', help='Name of the cofig data file', required=False)
-    parser.add_argument('-i', '--trn_data', help='Name of the training data file', required=False)
+    parser.add_argument('-i', '--train_data', help='Name of the training data file', required=False)
     parser.add_argument('-d', '--dev_data', help='Name of the dev data file', default=None, required=False)
     parser.add_argument('-n', '--name', help='something to add to the saved model name',
                         required=False, default='')
@@ -105,13 +102,13 @@ if __name__ == '__main__':
         vecs = data_utils.load_vectors('../resources/{}.vectors.npy'.format(vec_name),
                                    dim=vec_dim, seed=SEED)
 
-    trn_data_kwargs = {}
+    train_data_kwargs = {}
     dev_data_kwargs = {}
 
     if 'topic_name' in config:
         topic_vecs = np.load('{}/{}.{}.npy'.format(config['topic_path'], config['topic_name'], config.get('rep_v', 'centroids')))
 
-        trn_data_kwargs['topic_rep_dict'] = '{}/{}-train.labels.pkl'.format(config['topic_path'], config['topic_name'])
+        train_data_kwargs['topic_rep_dict'] = '{}/{}-train.labels.pkl'.format(config['topic_path'], config['topic_name'])
         dev_data_kwargs['topic_rep_dict'] = '{}/{}-dev.labels.pkl'.format(config['topic_path'], config['topic_name'])
 
     #############
@@ -120,32 +117,36 @@ if __name__ == '__main__':
     # load training data
     if 'bert' not in config and 'bert' not in config['name']:
         vocab_name = '../resources/{}.vocab.pkl'.format(vec_name)
-        data = datasets.StanceData(args['trn_data'], vocab_name,
+        data = datasets.StanceData(args['train_data'], vocab_name,
                                    pad_val=len(vecs) - 1,
                                    max_tok_len=int(config.get('max_tok_len', '200')),
                                    max_sen_len=int(config.get('max_sen_len', '10')),
                                    keep_sen=('keep_sen' in config),
-                                   **trn_data_kwargs)
+                                   **train_data_kwargs)
     else:
-        data = datasets.StanceData(args['trn_data'], None, max_tok_len=config['max_tok_len'],
+        data = datasets.StanceData(args['train_data'], None, max_tok_len=config['max_tok_len'],
                                    max_top_len=config['max_top_len'], is_bert=True,
                                    add_special_tokens=(config.get('together_in', '0') == '0'),
-                                   **trn_data_kwargs)
+                                   **train_data_kwargs)
 
     dataloader = data_utils.DataSampler(data,  batch_size=int(config['b']))
 
     # load dev data if specified
     if args['dev_data'] is not None:
         if 'bert' not in config and 'bert' not in config['name']:
-            dev_data = datasets.StanceData(args['dev_data'], vocab_name,
-                                               pad_val=len(vecs) - 1,
+            dev_data = datasets.StanceData(data_name=args['dev_data'],
+                                           vocab_name=vocab_name,
+                                           pad_val=len(vecs) - 1,
                                            max_tok_len=int(config.get('max_tok_len', '200')),
                                            max_sen_len=int(config.get('max_sen_len', '10')),
                                            keep_sen=('keep_sen' in config),
                                            **dev_data_kwargs)
         else:
-            dev_data = datasets.StanceData(args['dev_data'], None, max_tok_len=config['max_tok_len'],
-                                           max_top_len=config['max_top_len'], is_bert=True,
+            dev_data = datasets.StanceData(data_name=args['dev_data'],
+                                           vocab_name=None,
+                                           max_tok_len=config['max_tok_len'],
+                                           max_top_len=config['max_top_len'],
+                                           is_bert=True,
                                            add_special_tokens=(config.get('together_in', '0') == '0'),
                                            **dev_data_kwargs)
 

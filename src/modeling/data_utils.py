@@ -1,3 +1,5 @@
+from typing import Dict, Union
+
 import torch, random
 import numpy as np
 
@@ -21,23 +23,23 @@ def load_vectors(vecfile, dim=300, unk_rand=True, seed=0):
     return vecs
 
 
-def prepare_batch(sample_batched, **kwargs):
-    '''
+def prepare_batch(sample_batched, **kwargs) -> Dict[str, Union[list, np.ndarray, torch.Tensor]]:
+    """
     Prepares a batch of data to be used in training or evaluation. Includes the text reversed.
     :param sample_batched: a list of dictionaries, where each is a sample
     :return: a dictionary containing:
-            a tensor of all the text instances,
-            a tensor of all topic instances,
-            a list of labels for the text,topic instances
-            a list of the text lengths
-            a list of the topic lengths
-            a list with the original texts
-            a list with the original topics
+            text: a tensor of all the text instances,
+            topic: a tensor of all topic instances,
+            labels: a list of labels for the text,topic instances
+            txt_l: a list of the text lengths
+            top_l: a list of the topic lengths
+            ori_text: a list with the original texts
+            ori_topic: a list with the original topics
             AND (depending on flags)
-            a tensor of the inputs in the format CLS text SEP topic SEP (for Bert)
-            a tensor of the token type ids (for Bert)
-            a tensor with the generalized topic representations
-    '''
+            text_topic_batch: a tensor of the inputs in the format CLS text SEP topic SEP (for Bert)
+            token_type_ids: a tensor of the token type ids (for Bert)
+            topic_rep_ids: a tensor with the generalized topic representations
+    """
     text_lens = np.array([b['txt_l'] for b in sample_batched])
     topic_batch = torch.tensor([b['topic'] for b in sample_batched])
     labels = [b['label'] for b in sample_batched]
