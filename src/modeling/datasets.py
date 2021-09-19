@@ -60,8 +60,15 @@ class StanceData(Dataset):
                 num_sens = len(text)
                 ori_topic = json.loads(row['topic'])
                 ori_text = [' '.join(ti) for ti in text] if self.keep_sen else row['text_s']
-                text = self.tokenizer.encode(ori_text, add_special_tokens=self.add_special_tokens,
+                if not isinstance(ori_text, str):
+                    print(row)
+                    # print(json.dumps(row, indent=4))
+                try:
+                    text = self.tokenizer.encode(ori_text, add_special_tokens=self.add_special_tokens,
                                              max_length=int(self.max_tok_len), pad_to_max_length=True)
+                except ValueError:
+                    print(ori_text)
+                    raise
                 topic = self.tokenizer.encode(ori_topic, add_special_tokens=self.add_special_tokens,
                                               max_length=int(self.max_top_len), pad_to_max_length=True)
                 self.data_file.at[i, 'text_idx'] = text
@@ -162,6 +169,7 @@ class StanceData(Dataset):
             sample['token_type_ids'] = row['token_type_ids']
         if self.topic_rep_dict is not None:
             sample['topic_rep_id'] = self.topic_rep_dict[row['new_id']]
+
         return sample
 
 
