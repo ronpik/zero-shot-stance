@@ -1,5 +1,6 @@
 import numpy as np
 import torch, os, sys, argparse
+
 sys.path.append('./modeling')
 from modeling import data_utils, model_utils, datasets, input_models as im, models as bm
 import torch.nn as nn
@@ -12,7 +13,7 @@ NUM_GPUS = None
 use_cuda = torch.cuda.is_available()
 
 
-def eval(model_handler, dev_data, class_wise=False, is_test=False, correct_preds=False):
+def eval(model_handler, dev_data, dev_name, class_wise=False, correct_preds=False):
     '''
     Evaluates the given model on the given data, by computing
     macro-averaged F1, precision, and recall scores. Can also
@@ -24,27 +25,17 @@ def eval(model_handler, dev_data, class_wise=False, is_test=False, correct_preds
     model_handler.eval_and_print(data_name='TRAIN', class_wise=class_wise,
                                  correct_preds=correct_preds)
 
-    if is_test:
-        dev_name = 'test'
-    else:
-        dev_name = 'dev'
-
     model_handler.eval_and_print(data=dev_data, data_name=dev_name,
                                  class_wise=class_wise, correct_preds=correct_preds)
 
 
-def save_predictions(model_handler, dev_data, out_name, is_test=False, correct_preds=False):
+def save_predictions(model_handler, dev_data, dev_name, out_name, correct_preds=False):
     # train_preds, _, _, _ = model_handler.predict()
     dev_preds, _, _, _ = model_handler.predict(data=dev_data, correct_preds=correct_preds)
-    if is_test:
-        dev_name = 'test'
-    else:
-        dev_name = 'dev'
 
-    # predict_helper(train_preds, model_handler.dataloader.data).to_csv(out_name + '-train.csv', index=False)
-    # print("saved to {}-train.csv".format(out_name))
-    predict_helper(dev_preds, dev_data.data).to_csv(out_name + '-{}.csv'.format(dev_name), index=False)
-    print("saved to {}-{}.csv".format(out_name, dev_name))
+    outpath = f"{out_name}-{dev_name}.csv"
+    predict_helper(dev_preds, dev_data.data).to_csv(outpath, index=False)
+    print(f"saved to {outpath}")
 
 
 def predict_helper(pred_lst, pred_data):
@@ -67,7 +58,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--config_file', help='Name of the cofig data file', required=False)
     parser.add_argument('-i', '--train_data', help='Name of the training data file', required=False)
-    parser.add_argument('-d', '--dev_data', help='Name of the dev data file', default=None, required=False)
+    parser.add_argument('-d', '--dev_data', help='Path to the dev data file', default=None, required=False)
+    parser.add_argument('-a', '--data_name', help='Name of the dev data file', default=None, required=False)
     parser.add_argument('-k', '--ckp_name', help='Checkpoint name', required=False)
     parser.add_argument('-m', '--mode', help='What to do', required=True)
     parser.add_argument('-n', '--name', help='something to add to the saved model name',
@@ -75,6 +67,8 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--out', help='Ouput file name', default='')
     parser.add_argument('-v', '--score_key', help='What optimized for', required=False, default='f_macro')
     args = vars(parser.parse_args())
+
+    dev_name = args.get("data_name") or ("test" if "test" in args["dev_data"] else "dev")
 
     torch.manual_seed(SEED)
     torch.cuda.manual_seed_all(SEED)
@@ -91,22 +85,16 @@ if __name__ == '__main__':
     train_data_kwargs = {}
     dev_data_kwargs = {}
 
+    topic_vecs = None
+
     if 'topic_name' in config:
-        topic_vecs = np.load('{}/{}.{}.npy'.format(config['topic_path'],
-                                                   config['topic_name'],
-                                                   config.get('rep_v', 'centroids')))
-        train_data_kwargs['topic_rep_dict'] = '{}/{}-train.labels.pkl'.format(config['topic_path'],
-                                                                            config['topic_name'])
+        topic_dir = config['topic_path']
+        topic_name = config['topic_name']
+        reps = config.get('rep_v', 'centroids')
 
-        if 'test' in args['dev_data']:
-            dev_s = 'test'
-        elif "dev" in args["dev_data"]:
-            dev_s = 'dev'
-        else:
-            dev_s = None
-
-        if dev_s is not None:
-            dev_data_kwargs['topic_rep_dict'] = f"{config['topic_path']}/{config['topic_name']}-{dev_s}.labels.pkl"
+        topic_vecs = np.load(f"{topic_dir}/{topic_name}.{reps}.npy")
+        train_data_kwargs['topic_rep_dict'] = f"{topic_dir}/{topic_name}-train.labels.pkl"
+        dev_data_kwargs['topic_rep_dict'] = f"{topic_dir}/{topic_name}-{dev_name}.labels.pkl"
 
     #############
     # LOAD DATA #
@@ -118,39 +106,35 @@ if __name__ == '__main__':
         # load vectors #
         ################
 
-
         vec_name = config['vec_name']
         vec_dim = int(config['vec_dim'])
-
-        vecs = data_utils.load_vectors('../resources/{}.vectors.npy'.format(vec_name),
-                                       dim=vec_dim, seed=SEED)
-        vocab_name = '../resources/{}.vocab.pkl'.format(vec_name)
-        data = datasets.StanceData(args['train_data'], vocab_name, pad_val=len(vecs) - 1,
+        vecs_path = f"../resources/{vec_name}.vectors.npy"
+        vecs = data_utils.load_vectors(vecs_path, dim=vec_dim, seed=SEED)
+        vocab_path = f"../resources/{vec_name}.vocab.pkl"
+        data = datasets.StanceData(args['train_data'], vocab_path, pad_val=len(vecs) - 1,
                                    max_tok_len=int(config.get('max_tok_len', '200')),
                                    max_sen_len=int(config.get('max_sen_len', '10')),
                                    keep_sen=('keep_sen' in config),
                                    **train_data_kwargs)
+
+        dev_data = datasets.StanceData(args['dev_data'], vocab_path, pad_val=len(vecs) - 1,
+                                       max_tok_len=int(config.get('max_tok_len', '200')),
+                                       max_sen_len=int(config.get('max_sen_len', '10')),
+                                       keep_sen=('keep_sen' in config),
+                                       **dev_data_kwargs)
     else:
         data = datasets.StanceData(args['train_data'], None, max_tok_len=config['max_tok_len'],
                                    max_top_len=config['max_top_len'], is_bert=True,
                                    add_special_tokens=(config.get('together_in', '0') == '0'),
                                    **train_data_kwargs)
 
-    dataloader = data_utils.DataSampler(data, batch_size=int(config['b']))
-
-    if 'bert' not in config and 'bert' not in config['name']:
-        dev_data = datasets.StanceData(args['dev_data'], vocab_name, pad_val=len(vecs) - 1,
-                                       max_tok_len=int(config.get('max_tok_len', '200')),
-                                       max_sen_len=int(config.get('max_sen_len', '10')),
-                                       keep_sen=('keep_sen' in config),
-                                       **dev_data_kwargs)
-    else:
         dev_data = datasets.StanceData(args['dev_data'], None, max_tok_len=config['max_tok_len'],
                                        max_top_len=config['max_top_len'], is_bert=True,
                                        add_special_tokens=(config.get('together_in', '0') == '0'),
                                        **dev_data_kwargs)
 
-    dev_dataloader = data_utils.DataSampler(dev_data, batch_size=int(config['b']), shuffle=False)
+    dataloader = data_utils.DataSampler(data, batch_size=int(config['b']))
+    dev_dataloader = data_utils.DataSampler(dev_data, batch_size=512, shuffle=False)
 
     lr = float(config.get('lr', '0.001'))
 
@@ -160,19 +144,17 @@ if __name__ == '__main__':
                                                  use_both=(config.get('use_ori_topic', '1') == '1'),
                                                  static_vecs=(config.get('static_topics', '1') == '1'))
 
-        setup_fn = data_utils.setup_helper_bert_attffnn
-
-        loss_fn = nn.CrossEntropyLoss()
-
         model = bm.TGANet(in_dropout_prob=float(config['in_dropout']),
-                                 hidden_size=int(config['hidden_size']),
-                                 text_dim=int(config['text_dim']),
-                                 add_topic=(config.get('add_resid', '0') == '1'),
-                                 att_mode=config.get('att_mode', 'text_only'),
-                                 topic_dim=int(config['topic_dim']),
-                                 learned=(config.get('learned', '0') == '1'),
-                                 use_cuda=use_cuda)
+                          hidden_size=int(config['hidden_size']),
+                          text_dim=int(config['text_dim']),
+                          add_topic=(config.get('add_resid', '0') == '1'),
+                          att_mode=config.get('att_mode', 'text_only'),
+                          topic_dim=int(config['topic_dim']),
+                          learned=(config.get('learned', '0') == '1'),
+                          use_cuda=use_cuda)
 
+        setup_fn = data_utils.setup_helper_bert_attffnn
+        loss_fn = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters())
 
         kwargs = {'model': model, 'embed_model': input_layer, 'dataloader': dataloader,
@@ -188,7 +170,6 @@ if __name__ == '__main__':
                                                       use_score=args['score_key'],
                                                       **kwargs)
 
-
     elif 'ffnn-bert' in config['name']:
         if config.get('together_in', '0') == '1':
             batch_args = {'keep_sen': False}
@@ -203,7 +184,7 @@ if __name__ == '__main__':
             batch_args = {'keep_sen': False}
             input_layer = im.BERTLayer(mode='text-level', use_cuda=use_cuda)
 
-        setup_fn =data_utils.setup_helper_bert_ffnn
+        setup_fn = data_utils.setup_helper_bert_ffnn
 
         loss_fn = nn.CrossEntropyLoss()
         model = bm.FFNN(input_dim=input_layer.dim, in_dropout_prob=float(config['in_dropout']),
@@ -318,14 +299,12 @@ if __name__ == '__main__':
                                                       use_score=args['score_key'],
                                                       **kwargs)
 
-
-
     cname = '{}ckp-[NAME]-{}.tar'.format(config.get('ckp_path', 'data/checkpoints/'), args['ckp_name'])
     model_handler.load(filename=cname)
 
     if args['mode'] == 'eval':
-        eval(model_handler, dev_dataloader, class_wise=True, is_test=('test' in args['dev_data']))
+        eval(model_handler, dev_dataloader, dev_name, class_wise=True)
     elif args['mode'] == 'predict':
-        save_predictions(model_handler, dev_dataloader, out_name=args['out'], is_test=('test' in args['dev_data']))
+        save_predictions(model_handler, dev_dataloader, dev_name, out_name=args['out'])
     else:
         print("doing nothing")

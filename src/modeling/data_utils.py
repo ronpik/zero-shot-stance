@@ -1,3 +1,5 @@
+from math import floor, ceil
+
 from typing import Dict, Union
 
 import torch, random
@@ -79,6 +81,10 @@ class DataSampler:
         self.indices = list(range(len(data)))
         if shuffle: random.shuffle(self.indices)
         self.batch_num = 0
+
+    @property
+    def n_batches(self):
+        return int(ceil(len(self) / self.batch_size))
 
     def __len__(self):
         return len(self.data)

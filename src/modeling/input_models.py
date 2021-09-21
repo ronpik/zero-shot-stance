@@ -138,7 +138,7 @@ class JointBERTLayer(torch.nn.Module):
 
 
 class JointBERTLayerWithExtra(torch.nn.Module):
-    def __init__(self,vecs, use_both=True, static_vecs=True, use_cuda=False):
+    def __init__(self, vecs, use_both=True, static_vecs=True, use_cuda=False):
         super(JointBERTLayerWithExtra, self).__init__()
 
         self.use_cuda = use_cuda
@@ -149,10 +149,9 @@ class JointBERTLayerWithExtra(torch.nn.Module):
         self.topic_embeds = nn.Embedding.from_pretrained(topic_tensor, freeze=static_vecs)
 
         self.use_both = use_both
+        self.dim = 768
         if self.use_both:
-            self.dim = 768 + topic_tensor.shape[1]
-        else:
-            self.dim = 768
+            self.dim += topic_tensor.shape[1]
 
         if self.use_cuda:
             self.bert_layer = self.bert_layer.to('cuda')

@@ -318,7 +318,9 @@ class TorchModelHandler:
             data = self.dataloader
 
         t2pred = dict()
-        for sample_batched in tqdm(data):
+
+        print(f"Iterating over {len(data)} records in {data.n_batches} batches")
+        for sample_batched in tqdm(data, total=data.n_batches):
 
             with torch.no_grad():
                 y_pred, labels = self.get_pred_noupdate(sample_batched)

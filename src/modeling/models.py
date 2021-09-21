@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-import model_layers as bml
+import modeling.model_layers as bml
 
 
 class BiCondLSTMModel(torch.nn.Module):

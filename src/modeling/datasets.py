@@ -2,6 +2,7 @@ import pickle, json
 from torch.utils.data import Dataset
 import pandas as pd
 from functools import reduce
+from tqdm.auto import tqdm
 from transformers import BertTokenizer
 
 
@@ -27,8 +28,8 @@ class StanceData(Dataset):
         self.is_bert = is_bert
         self.add_special_tokens = add_special_tokens
 
-        if kwargs.get('topic_rep_dict', None) is not None:
-            self.topic_rep_dict = pickle.load(open(kwargs['topic_rep_dict'], 'rb'))
+        if "topic_rep_dict" in kwargs:
+            self.topic_rep_dict = pickle.load(open(kwargs["topic_rep_dict"], 'rb'))
         else:
             self.topic_rep_dict = None
 
@@ -54,7 +55,7 @@ class StanceData(Dataset):
         if self.is_bert:
             self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
             print("processing BERT")
-            for i in self.data_file.index:
+            for i in tqdm(self.data_file.index):
                 row = self.data_file.iloc[i]
                 text = json.loads(row['text'])
                 num_sens = len(text)

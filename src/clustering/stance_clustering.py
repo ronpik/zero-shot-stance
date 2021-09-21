@@ -1,3 +1,6 @@
+import sys
+import os
+from tqdm.auto import tqdm
 from typing import List
 
 import torch
@@ -13,13 +16,16 @@ import matplotlib.pyplot as plt
 
 from IPython import embed
 
-import sys
 import pickle
 
-from src.modeling import datasets, data_utils
+SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# MODELING_DIR = os.path.join(SRC_DIR, "modeling")
+sys.path.append(SRC_DIR)
+
+from modeling import datasets, data_utils
 
 # sys.path.append('../modeling')
-import src.modeling.input_models as im
+import modeling.input_models as im
 
 # import datasets, data_utils
 
@@ -129,7 +135,7 @@ def save_bert_vectors(embed_model, dataloader, batching_fn, batching_kwargs, wor
     topic2i = dict()
     didx = 0
     tidx = 0
-    for sample_batched in dataloader:
+    for sample_batched in tqdm(dataloader, total=dataloader.n_batches):
         args = batching_fn(sample_batched, **batching_kwargs)
         with torch.no_grad():
             embed_args = embed_model(**args)
@@ -137,8 +143,8 @@ def save_bert_vectors(embed_model, dataloader, batching_fn, batching_kwargs, wor
 
             vecs = args['txt_E']  # (B, L, 768)
             word_tokens = [dataloader.data.tokenizer.convert_ids_to_tokens(args['text'][i],
-                                                                         skip_special_tokens=True)
-                         for i in range(args['text'].shape[0])]
+                                                                           skip_special_tokens=True)
+                           for i in range(args['text'].shape[0])]
 
             # join the BERT word-piece tokens
             new_word_tokens = combine_word_piece_tokens(word_tokens, word2tfidf)
@@ -163,16 +169,17 @@ def save_bert_vectors(embed_model, dataloader, batching_fn, batching_kwargs, wor
                 topic2i[b['ori_topic']] = tidx
                 tidx += 1
                 topic_matrix.append(topic_vecs[bi])
+
     docm = np.array(doc_matrix)
-    np.save('../../resources/topicreps/bert_tfidfW_doc-{}.vecs.npy'.format(dataname), docm)
+    np.save(f"../../resources/topicreps/bert_tfidfW_doc-{dataname}.vecs.npy", docm)
     del docm
     topicm = np.array(topic_matrix)
-    np.save('../../resources/topicreps/bert_topic-{}.vecs.npy'.format(dataname), topicm)
+    np.save(f"../../resources/topicreps/bert_topic-{dataname}.vecs.npy", topicm)
     del topicm
     print("[{}] saved to ../../resources/topicreps/bert_[tfidfW_doc/topic]-{}.vecs.npy".format(dataname, dataname))
 
-    pickle.dump(doc2i, open('../../resources/topicreps/bert_tfidfW_doc-{}.vocab.pkl'.format(dataname), 'wb'))
-    pickle.dump(topic2i, open('../../resources/topicreps/bert_topic-{}.vocab.pkl'.format(dataname), 'wb'))
+    pickle.dump(doc2i, open(f"../../resources/topicreps/bert_tfidfW_doc-{dataname}.vocab.pkl", 'wb'))
+    pickle.dump(topic2i, open(f"../../resources/topicreps/bert_topic-{dataname}.vocab.pkl", 'wb'))
     print("[{}] saved to ../../resources/topicreps/bert_[tfidfW_doc/topic]-{}.vocab.pkl".format(dataname, dataname))
 
 
@@ -271,9 +278,9 @@ def get_cluster_labels(dataname, k, X, Y, s):
     id2i = dict()
     for rid, eid in Y.items():
         id2i[rid] = labels[eid]
-    oname = '../../resources/topicreps/{}_ward_euclidean_{}-{}.labels.pkl'.format(dataname, k, s)
+    oname = f"../../resources/topicreps/{dataname}_ward_euclidean_{k}-{s}.labels.pkl"
     pickle.dump(id2i, open(oname, 'wb'))
-    print("saved to {}".format(oname))
+    print(f"saved to {oname}")
 
 
 if __name__ == '__main__':
@@ -281,14 +288,16 @@ if __name__ == '__main__':
     parser.add_argument('-m', '--mode', help='What to do', required=True)
     parser.add_argument('-i', '--train_data', help='Name of the training data file', required=False)
     parser.add_argument('-d', '--dev_data', help='Name of the dev data file', required=False)
-    parser.add_argument('-e', '--test_data', help='Name of the test data file', required=False,
+    parser.add_argument('-e', '--test_data', help='path to the test data file', required=False,
                         default=None)
+    parser.add_argument('-a', '--test_name', help='Name of the test data file', required=False,
+                        default="test")
     parser.add_argument('-p', '--data_path', required=False, help='Data path to directory for topic reps')
     parser.add_argument('-t', '--topic_name', required=False, default='bert_topic')
     parser.add_argument('-c', '--doc_name', required=False, default='bert_tfidfW_doc')
-    parser.add_argument('-k', '--k', required=False)
+    parser.add_argument('-k', '--k', default=197, help="Number of clusters")
     parser.add_argument('-v', '--value_range', required=False, help='Range of values for search')
-    parser.add_argument('-n', '--n', help='Num neigbors', required=False)
+    parser.add_argument('-n', '--n', help='Num neighbors', required=False)
     parser.add_argument('-f', '--file_name', help='Name for files', required=False,
                         default='bert_tfidfW')
     parser.add_argument('-r', '--num_trials', help='Number of trials for search')
@@ -306,6 +315,7 @@ if __name__ == '__main__':
                                    max_top_len=5, is_bert=True, add_special_tokens=True)
     dev_dataloader = data_utils.DataSampler(dev_data, batch_size=64, shuffle=False)
 
+    test_dataloader = None
     if args['test_data'] is not None:
         test_data = datasets.StanceData(args['test_data'], None, max_token_len=200,
                                         max_top_len=5, is_bert=True, add_special_tokens=True)
@@ -319,38 +329,42 @@ if __name__ == '__main__':
         batching_fn = data_utils.prepare_batch
         batch_args = {'keep_sen': False}
 
+        print("Load training data")
         corpus = load_data(args['train_data'])
+
+        print("Create tfidf features")
         word2tfidf = get_features(corpus)
 
         save_bert_vectors(input_layer, dataloader, batching_fn, batch_args, word2tfidf, 'train')
         save_bert_vectors(input_layer, dev_dataloader, batching_fn, batch_args, word2tfidf, 'dev')
 
         if args['test_data'] is not None:
-            save_bert_vectors(input_layer, test_dataloader, batching_fn, batch_args, word2tfidf, 'test')
+            save_bert_vectors(input_layer, test_dataloader, batching_fn, batch_args, word2tfidf, args["test_name"])
 
     elif args['mode'] == '2':
         print("Clustering")
         train_X, train_Y = load_vector_data(args['data_path'], docname=args['doc_name'], topicname=args['topic_name'],
-                                        dataname='train', dataloader=dataloader, mode='concat')
+                                            dataname='train', dataloader=dataloader, mode='concat')
         dev_X, dev_Y = load_vector_data(args['data_path'], docname=args['doc_name'], topicname=args['topic_name'],
                                         dataname='dev', dataloader=dev_dataloader, mode='concat')
-        if args['k'] is None:
+        if args['k'] == 0:
             min_v, max_v = args['value_range'].split('-')
-
             tried_v = set()
             sse_lst = []
             k_lst = []
+
+            def choose_random_k():
+                return np.random.randint(int(min_v), int(max_v) + 1)
+
             for trial_num in range(int(args['num_trials'])):
-                k = np.random.randint(int(min_v), int(max_v) + 1)
-                while k in tried_v:
-                    k = np.random.randint(int(min_v), int(max_v) + 1)
+                while (k := choose_random_k()) in trial_num: pass
 
                 sse = cluster(args['file_name'], train_X, train_Y, dev_X, dev_Y, k, trial_num)
-
                 sse_lst.append(sse)
                 k_lst.append(k)
 
                 tried_v.add(k)
+
             sort_k_indices = np.argsort(k_lst)
             sorted_k = [k_lst[i] for i in sort_k_indices]
             sorted_sse = [sse_lst[i] for i in sort_k_indices]
@@ -370,10 +384,8 @@ if __name__ == '__main__':
         get_cluster_labels('bert_tfidfW', int(args['k']), X, Y, 'dev')
 
         X, Y = load_vector_data(args['data_path'], docname=args['doc_name'], topicname=args['topic_name'],
-                                dataname='test', dataloader=test_dataloader, mode='concat')
-        get_cluster_labels('bert_tfidfW', int(args['k']), X, Y, 'test')
-
-
+                                dataname=args["test_name"], dataloader=test_dataloader, mode='concat')
+        get_cluster_labels('bert_tfidfW', int(args['k']), X, Y, args["test_name"])
 
     else:
         print("doing nothing.")
