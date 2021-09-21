@@ -1,9 +1,47 @@
+from multiprocessing import Pool
+
+from tqdm.auto import tqdm
+from typing import Callable, Sequence, List, Iterable
+
 import pickle, json
 from torch.utils.data import Dataset
 import pandas as pd
-from functools import reduce
-from tqdm.auto import tqdm
+from functools import reduce, partial
+# from tqdm.auto import tqdm
+from tqdm.contrib.concurrent import process_map
 from transformers import BertTokenizer
+
+
+def chunk(seq: Sequence, size: int) -> Iterable[Sequence]:
+    yield from (seq[pos: pos + size] for pos in range(0, len(seq), size))
+
+
+def process_chunk(seq: Sequence, apply: Callable) -> list:
+    return list(map(apply, seq))
+
+
+def apply_parallel(apply: Callable, seq: Sequence, chunksize: int = 100) -> pd.Series:
+    processed: List = [None for _ in range(len(seq))]
+    with Pool() as p:
+        with tqdm(total=len(seq)) as pbar:
+            chunks = chunk(seq, chunksize)
+            i = 0
+            process = partial(process_chunk, func=apply)
+            for processed_chunk in p.imap(process, chunks):
+                pbar.update(len(processed_chunk))
+                for element in processed_chunk:
+                    processed[i] = element
+                    i += 1
+
+    return pd.Series(processed)
+
+
+# def convert_to_zs_format(data: pd.DataFrame) -> pd.DataFrame:
+#     text = data["text"]
+#     print("Parsing Texts")
+#     parsed_doc = apply_parallel(parse_text, text, 100)
+#     print("Extract tokens and post-tags")
+#     tokens_with_pos = apply_parallel(get_tokens_with_stopwords, parsed_doc, 100)
 
 
 class StanceData(Dataset):
@@ -55,6 +93,7 @@ class StanceData(Dataset):
         if self.is_bert:
             self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
             print("processing BERT")
+            # todo  make parallel
             for i in tqdm(self.data_file.index):
                 row = self.data_file.iloc[i]
                 text = json.loads(row['text'])
