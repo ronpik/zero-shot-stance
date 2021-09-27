@@ -1,26 +1,48 @@
 #!/usr/bin/env bash
 
 
-train_data=../data/VAST/vast_train.csv
-dev_data=../data/VAST/vast_dev.csv
-fourforums_data=../data/fourforums/4forum.zs.csv
-#dev_data="/Users/ronpick/workspace/zero-shot-stance/data/createdebate/cdvast.csv"
+prefix="test"
+topic_path="../resources/topicreps/"
+config_path="../config/config-tganet.txt"
+outdir="./"
+action=$1
+shift
 
-dataname=$3
-datapath=$4
+while getopts "a:p:c:o:k:" opt; do
+  case $opt in
+    a) prefix="$OPTARG"
+    ;;
+    p) topic_path="$OPTARG"
+    ;;
+    c) config_path="$OPTARG"
+    ;;
+    o) outdir="$OPTARG"
+    ;;
+    k) model_suffix="$OPTARG"
+    ;;
+    \?) echo "Invalid option -$OPTARG" >&2
+    ;;
+  esac
+done
 
-if [ $1 == 'eval' ]
-then
+# shift options
+shift $((OPTIND - 1))
+
+train_data=$1
+test_data=$2
+outpath="${outdir}/${prefix}-preds.csv"
+
+
+if [ "${action}" == 'eval' ]; then
     echo "Evaluating a model"
-    python eval_model.py -m "eval" -k BEST -s $2 -i ${train_data} -d ${dev_data}
-
-elif [ $1 == 'predict' ]
-then
-    echo "Saving predictions from a model to $3"
-    echo "eval_model.py -m \"predict\" -k BEST -s $2 -i ${train_data} -d \"${datapath}\" -a \"${dataname}\" -o \"${dataname}\""
-    python eval_model.py -m "predict" -k BEST -s $2 -i ${train_data} -d "${datapath}" -a "${dataname}" -o "${dataname}"
-
-
+elif [ "$action" == 'predict' ]; then
+    echo "Saving predictions from a model to ${outpath}"
 else
-    echo "Doing nothing"
+    echo "Unknown action: ${action}"
+    exit
 fi
+
+echo "python eval_model.py -m \"${action}\" -k \"${model_suffix}\" -s \"${config_path}\" -i \"${train_data}\" -d \"${test_data}\" -a \"${prefix}\" -p \"${topic_path}\" -o \"${outpath}\""
+python eval_model.py -m "${action}" -k "${model_suffix}" -s "${config_path}" -i "${train_data}" -d "${test_data}" -a "${prefix}" -p "${topic_path}" -o "${outpath}"
+
+

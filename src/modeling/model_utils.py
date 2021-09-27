@@ -2,7 +2,7 @@ import torch, pickle, time, json, copy
 from sklearn.metrics import f1_score, precision_score, recall_score
 import numpy as np
 import torch.nn as nn
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 
 class ModelHandler:
@@ -11,6 +11,7 @@ class ModelHandler:
     save it, load it, and evaluate it. The model used here is assumed to be an
     sklearn model. Use TorchModelHandler for a model written in pytorch.
     '''
+
     def __init__(self, model, dataloader, name):
         self.model = model
         self.dataloader = dataloader
@@ -19,7 +20,7 @@ class ModelHandler:
 
         self.score_dict = dict()
 
-    def prepare_data(self, data=None, type_lst=None):
+    def prepare_data(self, data=None, type_list=None):
         '''
         Prepares data to be used for training or dev by formatting it
         correctly.
@@ -36,18 +37,19 @@ class ModelHandler:
 
         concat_data = []
         labels = []
-        id_lst = []
+        ids = []
         for s in data:
-            if type_lst is not None and s.get('seen', -1) not in type_lst: continue
+            if type_list is not None and s.get('seen', -1) not in type_list:
+                continue
+
             concat_data.append(s['text'] + s['topic'])
             labels.append(np.argmax(s['label']))
-            id_lst.append(s['id'])
+            ids.append(s['id'])
 
         input_data = np.array(concat_data)
         input_labels = np.array(labels)
 
-        return input_data, input_labels, id_lst
-
+        return input_data, input_labels, ids
 
     def train_step(self):
         print("   preparing data")
@@ -73,9 +75,9 @@ class ModelHandler:
             self.score_dict['{}_pro'.format(name)] = vals[1]
             self.score_dict['{}_none'.format(name)] = vals[2]
 
-    def eval_model(self, data, class_wise=False, type_lst=None, pass_ids=False):
+    def eval_model(self, data, class_wise=False, type_list=None, pass_ids=False):
         print("   preparing data")
-        input_data, true_labels, id_lst = self.prepare_data(data, type_lst=type_lst)
+        input_data, true_labels, id_lst = self.prepare_data(data, type_list=type_list)
         print("   making predictions")
 
         if pass_ids:
@@ -84,8 +86,8 @@ class ModelHandler:
             pred_labels = self.model.predict(input_data)
 
         print("   computing scores")
-        if type_lst is not None:
-            print("type list {}".format(type_lst))
+        if type_list is not None:
+            print("type list {}".format(type_list))
         self.compute_scores(f1_score, true_labels, pred_labels, class_wise, 'f')
         # calculate class-wise and macro-average precision
         self.compute_scores(precision_score, true_labels, pred_labels, class_wise, 'p')
@@ -101,6 +103,7 @@ class TorchModelHandler:
     save it, load it, and evaluate it. The model used here is assumed to be
     written in pytorch.
     '''
+
     def __init__(self, num_ckps=10, use_score='f_macro', use_cuda=False, use_last_batch=True,
                  num_gpus=None, checkpoint_path='data/checkpoints/',
                  result_path='data/', **params):
@@ -112,9 +115,8 @@ class TorchModelHandler:
         self.batching_fn = params['batching_fn']
         self.batching_kwargs = params['batching_kwargs']
         self.setup_fn = params['setup_fn']
-        self.fine_tune=params.get('fine_tune', False)
-        self.save_checkpoints=params.get('save_ckp', False)
-
+        self.fine_tune = params.get('fine_tune', False)
+        self.save_checkpoints = params.get('save_ckp', False)
 
         self.num_labels = self.model.num_labels
         self.labels = params.get('labels', None)
@@ -136,20 +138,20 @@ class TorchModelHandler:
         # evaluation fields
         self.score_dict = dict()
         self.max_score = 0.
-        self.max_lst = []  # to keep top 5 scores
+        self.max_list = []  # to keep top 5 scores
         self.score_key = use_score
 
         # GPU support
         self.use_cuda = use_cuda
 
         if self.use_cuda:
-            self.device = 'cuda' if params.get('device') is None else 'cuda:'+ params['device']
+            self.device = 'cuda' if params.get('device') is None else 'cuda:' + params['device']
             # move model and loss function to GPU, NOT the embedder
             self.model = self.model.to(self.device)
             self.loss_function = self.loss_function.to(self.device)
 
         if num_gpus is not None:
-            self.model = nn.DataParallel(self.model, device_ids=[0,1])
+            self.model = nn.DataParallel(self.model, device_ids=[0, 1])
 
     def save_best(self, data=None, scores=None, data_name=None, class_wise=False):
         '''
@@ -171,27 +173,27 @@ class TorchModelHandler:
         # update list of top scores
         curr_score = scores[self.score_key]
         score_updated = False
-        if len(self.max_lst) < 5:
+        if len(self.max_list) < 5:
             score_updated = True
-            if len(self.max_lst) > 0:
-                prev_max = self.max_lst[-1][0][self.score_key] # last thing in the list
+            if len(self.max_list) > 0:
+                prev_max = self.max_list[-1][0][self.score_key]  # last thing in the list
             else:
                 prev_max = curr_score
-            self.max_lst.append((scores, self.epoch - 1))
-        elif curr_score > self.max_lst[0][0][self.score_key]: # if bigger than the smallest score
+            self.max_list.append((scores, self.epoch - 1))
+        elif curr_score > self.max_list[0][0][self.score_key]:  # if bigger than the smallest score
             score_updated = True
-            prev_max = self.max_lst[-1][0][self.score_key] # last thing in the list
-            self.max_lst[0] = (scores, self.epoch - 1) #  replace smallest score
+            prev_max = self.max_list[-1][0][self.score_key]  # last thing in the list
+            self.max_list[0] = (scores, self.epoch - 1)  # replace smallest score
 
         # update best saved model and file with top scores
         if score_updated:
             # sort the scores
-            self.max_lst = sorted(self.max_lst, key=lambda p: p[0][self.score_key]) # lowest first
+            self.max_list = sorted(self.max_list, key=lambda p: p[0][self.score_key])  # lowest first
             # write top 5 scores
-            f = open('{}{}.top5_{}.txt'.format(self.result_path, self.name, self.score_key), 'w') # overrides
-            for p in self.max_lst:
+            f = open('{}{}.top5_{}.txt'.format(self.result_path, self.name, self.score_key), 'w')  # overrides
+            for p in self.max_list:
                 f.write('Epoch: {}\nScore: {}\nAll Scores: {}\n'.format(p[1], p[0][self.score_key],
-                                                                      json.dumps(p[0])))
+                                                                        json.dumps(p[0])))
             # save best model step, if its this one
             print(curr_score, prev_max)
             if curr_score > prev_max:
@@ -206,14 +208,15 @@ class TorchModelHandler:
         '''
         if num is None:
             check_num = self.checkpoint_num
-        else: check_num = num
+        else:
+            check_num = num
 
         torch.save({
             'epoch': self.epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'loss': self.loss
-        }, '{}ckp-{}-{}.tar'.format(self.checkpoint_path, self.name, check_num))
+        }, f"{self.checkpoint_path}ckp-{self.name}-{check_num}.tar")
 
         if not self.embed_model.static_embeds:
             torch.save({
@@ -225,7 +228,8 @@ class TorchModelHandler:
         if num is None:
             self.checkpoint_num = (self.checkpoint_num + 1) % self.num_ckps
 
-    def load(self, filename='data/checkpoints/ckp-[NAME]-FINAL.tar', use_cpu=False):#filename='data/checkpoints/ckp-[NAME]-FINAL.tar'):
+    def load(self, filename='data/checkpoints/ckp-[NAME]-FINAL.tar',
+             use_cpu=False):  # filename='data/checkpoints/ckp-[NAME]-FINAL.tar'):
         '''
         Loads a saved pytorch model from a checkpoint file.
         :param filename: the name of the file to load from. By default uses
@@ -261,7 +265,7 @@ class TorchModelHandler:
             self.optimizer.step()
 
         end_time = time.time()
-        print("   took: {:.1f} min".format((end_time - start_time)/60.))
+        print("   took: {:.1f} min".format((end_time - start_time) / 60.))
         self.epoch += 1
 
     def compute_scores(self, score_fn, true_labels, pred_labels, class_wise, name):
@@ -380,7 +384,7 @@ class TorchModelHandler:
         :return: a map from score names to values
         '''
         scores = self.eval_model(data=data, class_wise=class_wise, correct_preds=correct_preds)
-        print("Evaling on \"{}\" data".format(data_name))
+        print("Evaluation on \"{}\" data".format(data_name))
         for s_name, s_val in scores.items():
             print("{}: {}".format(s_name, s_val))
         return scores

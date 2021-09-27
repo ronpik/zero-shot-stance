@@ -92,18 +92,18 @@ def eval_helper(model_handler,datasampler, model_type, is_train=False):
 
     if not is_train:
         if model_type != 'cmaj':
-            dev_scores_unseen = model_handler.eval_model(data=datasampler, class_wise=True, type_lst=[0])
+            dev_scores_unseen = model_handler.eval_model(data=datasampler, class_wise=True, type_list=[0])
         else:
             dev_scores_unseen = model_handler.eval_model(data=datasampler, class_wise=True,
-                                                         type_lst=[0], pass_ids=True)
+                                                         type_list=[0], pass_ids=True)
         for s in dev_scores_unseen:
             print('{}: {}'.format(s, dev_scores_unseen[s]))
 
         if model_type != 'cmaj':
-            dev_scores_seen = model_handler.eval_model(data=datasampler, class_wise=True, type_lst=[1])
+            dev_scores_seen = model_handler.eval_model(data=datasampler, class_wise=True, type_list=[1])
         else:
             dev_scores_seen = model_handler.eval_model(data=datasampler, class_wise=True,
-                                                       type_lst=[1], pass_ids=True)
+                                                       type_list=[1], pass_ids=True)
         for s in dev_scores_seen:
             print('{}: {}'.format(s, dev_scores_seen[s]))
 

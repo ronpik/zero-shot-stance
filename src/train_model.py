@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch, argparse, time
 from modeling import data_utils, model_utils, datasets, input_models as im, models as bm
@@ -66,6 +67,7 @@ def train(model_handler, num_epochs, verbose=True, dev_data=None,
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--config_file', help='Name of the cofig data file', required=False)
+    parser.add_argument('-t', '--topic_dir', help="path to the topic representation directory", required=False)
     parser.add_argument('-i', '--train_data', help='Name of the training data file', required=False)
     parser.add_argument('-d', '--dev_data', help='Name of the dev data file', default=None, required=False)
     parser.add_argument('-n', '--name', help='something to add to the saved model name',
@@ -106,10 +108,13 @@ if __name__ == '__main__':
     dev_data_kwargs = {}
 
     if 'topic_name' in config:
-        topic_vecs = np.load('{}/{}.{}.npy'.format(config['topic_path'], config['topic_name'], config.get('rep_v', 'centroids')))
+        topic_dir = args["topic_dir"]    #config['topic_path']
+        topic_name = config['topic_name']
+        topic_vecs_path = os.path.join(topic_dir, f"{topic_name}.{config.get('rep_v', 'centroids')}.npy")
+        topic_vecs = np.load(topic_vecs_path)
 
-        train_data_kwargs['topic_rep_dict'] = '{}/{}-train.labels.pkl'.format(config['topic_path'], config['topic_name'])
-        dev_data_kwargs['topic_rep_dict'] = '{}/{}-dev.labels.pkl'.format(config['topic_path'], config['topic_name'])
+        train_data_kwargs['topic_rep_dict'] = os.path.join(topic_dir, f"{topic_name}-train.labels.pkl")
+        dev_data_kwargs['topic_rep_dict'] = os.path.join(topic_dir, f"{topic_name}-dev.labels.pkl")
 
     #############
     # LOAD DATA #

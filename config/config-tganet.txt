@@ -4,7 +4,7 @@ res_path:../data/
 b:32
 text_dim:768
 use_ori_topic:0
-epochs:50
+epochs:70
 together_in:1
 att_mode:topic_only
 topic_name:bert_tfidfW_ward_euclidean_197

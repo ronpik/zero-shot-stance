@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
 
+DEFAULT_TOPIC_DIR = "../resources/topicreps"
+
 VECTOR_NAME = 'glove.6B.100d'
 SEED = 0
 NUM_GPUS = None
@@ -29,11 +31,10 @@ def eval(model_handler, dev_data, dev_name, class_wise=False, correct_preds=Fals
                                  class_wise=class_wise, correct_preds=correct_preds)
 
 
-def save_predictions(model_handler, dev_data, dev_name, out_name, correct_preds=False):
+def save_predictions(model_handler, dev_data, outpath, correct_preds=False):
     # train_preds, _, _, _ = model_handler.predict()
     dev_preds, _, _, _ = model_handler.predict(data=dev_data, correct_preds=correct_preds)
 
-    outpath = f"{out_name}-{dev_name}.csv"
     predict_helper(dev_preds, dev_data.data).to_csv(outpath, index=False)
     print(f"saved to {outpath}")
 
@@ -60,6 +61,7 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--train_data', help='Name of the training data file', required=False)
     parser.add_argument('-d', '--dev_data', help='Path to the dev data file', default=None, required=False)
     parser.add_argument('-a', '--data_name', help='Name of the dev data file', default=None, required=False)
+    parser.add_argument('-p', '--topic_dir', type=str, default=DEFAULT_TOPIC_DIR, help='Data path to directory for topic reps')
     parser.add_argument('-k', '--ckp_name', help='Checkpoint name', required=False)
     parser.add_argument('-m', '--mode', help='What to do', required=True)
     parser.add_argument('-n', '--name', help='something to add to the saved model name',
@@ -88,7 +90,7 @@ if __name__ == '__main__':
     topic_vecs = None
 
     if 'topic_name' in config:
-        topic_dir = config['topic_path']
+        topic_dir = args["topic_dir"]    #config['topic_path']
         topic_name = config['topic_name']
         reps = config.get('rep_v', 'centroids')
 
@@ -299,12 +301,13 @@ if __name__ == '__main__':
                                                       use_score=args['score_key'],
                                                       **kwargs)
 
-    cname = '{}ckp-[NAME]-{}.tar'.format(config.get('ckp_path', 'data/checkpoints/'), args['ckp_name'])
-    model_handler.load(filename=cname)
+    checkpoints_dir_path = config.get('ckp_path', 'data/checkpoints/')
+    model_path = os.path.join(checkpoints_dir_path, f"ckp-[NAME]-{args['ckp_name']}.tar")
+    model_handler.load(filename=model_path)
 
     if args['mode'] == 'eval':
         eval(model_handler, dev_dataloader, dev_name, class_wise=True)
     elif args['mode'] == 'predict':
-        save_predictions(model_handler, dev_dataloader, dev_name, out_name=args['out'])
+        save_predictions(model_handler, dev_dataloader, outpath=args['out'])
     else:
         print("doing nothing")
