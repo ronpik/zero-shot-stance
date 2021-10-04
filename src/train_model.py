@@ -9,10 +9,12 @@ SEED  = 0
 NUM_GPUS = None
 use_cuda = torch.cuda.is_available()
 
+DEFAULT_TOPIC_DIR = "../resources/topicreps"
+
 
 def train(model_handler, num_epochs, verbose=True, dev_data=None,
           early_stopping=False, num_warm=0, is_bert=False):
-    '''
+    """
     Trains the given model using the given data for the specified
     number of epochs. Prints training loss and evaluation starting
     after 10 epochs. Saves at most 10 checkpoints plus a final one.
@@ -21,9 +23,7 @@ def train(model_handler, num_epochs, verbose=True, dev_data=None,
     :param num_epochs: the number of epochs to train the model for.
     :param verbose: whether or not to print train results while training.
                     Default (True): do print intermediate results.
-    :param corpus_samplers: list of samplers for individual corpora, None
-                            if only evaling on the full corpus.
-    '''
+    """
     prev_dev_loss = 0
     for epoch in range(num_epochs):
         model_handler.train_step()
@@ -63,17 +63,19 @@ def train(model_handler, num_epochs, verbose=True, dev_data=None,
         model_handler.eval_and_print(data=dev_data, data_name='DEV')
 
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--config_file', help='Name of the cofig data file', required=False)
-    parser.add_argument('-t', '--topic_dir', help="path to the topic representation directory", required=False)
-    parser.add_argument('-i', '--train_data', help='Name of the training data file', required=False)
-    parser.add_argument('-d', '--dev_data', help='Name of the dev data file', default=None, required=False)
-    parser.add_argument('-n', '--name', help='something to add to the saved model name',
-                        required=False, default='')
-    parser.add_argument('-e', '--early_stop', help='Whether to do early stopping or not',
-                        required=False, type=bool, default=False)
+    parser.add_argument('-t', "--topic_dir", default=DEFAULT_TOPIC_DIR,
+                        help="path to the topic representation directory")
+    parser.add_argument('-i', '--train_data', required=True,
+                        help='Name of the training data and path separated by a colon')
+    parser.add_argument('-d', '--dev_data', default=None, required=True,
+                        help='Name of the dev data and path separated by a colon')
+    parser.add_argument('-n', '--name', default="",
+                        help="something to add to the saved model name")
+    parser.add_argument('-e', '--early_stop', type=bool, default=True,
+                        help='Whether to do early stopping or not')
     parser.add_argument('-p', '--num_warm', help='Number of warm-up epochs', required=False,
                         type=int, default=0)
     parser.add_argument('-k', '--score_key', help='Score to use for optimization', required=False,
@@ -193,7 +195,7 @@ if __name__ == '__main__':
         model_handler = model_utils.TorchModelHandler(use_cuda=use_cuda, num_gpus=NUM_GPUS,
                                                       checkpoint_path=config.get('ckp_path', 'data/checkpoints/'),
                                                       result_path=config.get('res_path','data/gen-stance/'),
-                                                      use_score=args['score_key'],save_ckp=(args['save_ckp'] == 1),
+                                                      use_score=args['score_key'], save_ckp=(args['save_ckp'] == 1),
                                                       **kwargs)
 
     elif 'CTSAN' in config['name']:

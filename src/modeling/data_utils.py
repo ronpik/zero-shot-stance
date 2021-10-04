@@ -5,6 +5,8 @@ from typing import Dict, Union
 import torch, random
 import numpy as np
 
+from modeling.datasets import StanceData
+
 
 def load_vectors(vecfile, dim=300, unk_rand=True, seed=0):
     '''
@@ -19,6 +21,7 @@ def load_vectors(vecfile, dim=300, unk_rand=True, seed=0):
         vecs = np.vstack((vecs, np.random.randn(dim))) # <unk> -> V-2 ??
     else:
         vecs = np.vstack((vecs, np.zeros(dim))) # <unk> -> V - 2??
+
     vecs = np.vstack((vecs, np.zeros(dim))) # pad -> V-1 ???
     vecs = vecs.astype(float, copy=False)
 
@@ -72,8 +75,8 @@ class DataSampler:
     Is iterable. By default shuffles the data each time all the data
     has been used through iteration.
     '''
-    def __init__(self, data, batch_size, shuffle=True):
-        self.data = data
+    def __init__(self, data: StanceData, batch_size, shuffle=True):
+        self.data: StanceData = data
         self.batch_size = batch_size
         self.shuffle = shuffle
         random.seed(0)
@@ -90,7 +93,7 @@ class DataSampler:
         return len(self.data)
 
     def num_batches(self):
-        return len(self.data) / float(self.batch_size)
+        return self.n_batches
 
     def __iter__(self):
         self.indices = list(range(len(self.data)))
@@ -98,13 +101,13 @@ class DataSampler:
         return self
 
     def __next__(self):
-        if self.indices != []:
+        if len(self.indices) > 0:
             idxs = self.indices[:self.batch_size]
             batch = [self.data.__getitem__(i) for i in idxs]
             self.indices = self.indices[self.batch_size:]
             return batch
-        else:
-            raise StopIteration
+
+        raise StopIteration
 
     def get(self):
         self.reset()

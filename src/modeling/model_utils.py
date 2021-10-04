@@ -1,8 +1,16 @@
-import torch, pickle, time, json, copy
-from sklearn.metrics import f1_score, precision_score, recall_score
+import copy
+import json
+import pickle
+import time
+
 import numpy as np
+import torch
 import torch.nn as nn
+
+from sklearn.metrics import f1_score, precision_score, recall_score
 from tqdm.auto import tqdm
+
+from modeling.data_utils import DataSampler
 
 
 class ModelHandler:
@@ -230,11 +238,11 @@ class TorchModelHandler:
 
     def load(self, filename='data/checkpoints/ckp-[NAME]-FINAL.tar',
              use_cpu=False):  # filename='data/checkpoints/ckp-[NAME]-FINAL.tar'):
-        '''
+        """
         Loads a saved pytorch model from a checkpoint file.
         :param filename: the name of the file to load from. By default uses
                         the final checkpoint for the model of this' name.
-        '''
+        """
         filename = filename.replace('[NAME]', self.name)
         checkpoint = torch.load(filename, map_location=torch.device('cpu'))
         self.model.load_state_dict(checkpoint['model_state_dict'])
@@ -293,23 +301,7 @@ class TorchModelHandler:
             if n > 2:
                 self.score_dict['{}_none'.format(name)] = vals[2]
 
-    def eval_model(self, data=None, class_wise=False, correct_preds=False):
-        '''
-        Evaluates this model on the given data. Stores computed
-        scores in the field "score_dict". Currently computes macro-averaged
-        F1 scores, precision and recall. Can also compute scores on a class-wise basis.
-        :param data: the data to use for evaluation. By default uses the internally stored data
-                    (should be a DataSampler if passed as a parameter).
-        :param class_wise: flag to determine whether to compute class-wise scores in
-                            addition to macro-averaged scores.
-        :return: a map from score names to values
-        '''
-        pred_labels, true_labels, t2pred, marks = self.predict(data, correct_preds=correct_preds)
-        self.score(pred_labels, true_labels, class_wise, t2pred, marks)
-
-        return self.score_dict
-
-    def predict(self, data=None, correct_preds=False):
+    def predict_analyze(self, data=None, correct_preds=False):
         all_y_pred = None
         all_labels = None
         all_marks = None
@@ -369,6 +361,41 @@ class TorchModelHandler:
             pred_labels = self.retroactive_correct(all_y_pred, pred_labels, all_ct)
         true_labels = all_labels
         return pred_labels, true_labels, t2pred, all_marks
+
+    def eval_model(self, data=None, class_wise=False, correct_preds=False):
+        """
+        Evaluates this model on the given data. Stores computed
+        scores in the field "score_dict". Currently computes macro-averaged
+        F1 scores, precision and recall. Can also compute scores on a class-wise basis.
+        :param data: the data to use for evaluation. By default uses the internally stored data
+                    (should be a DataSampler if passed as a parameter).
+        :param class_wise: flag to determine whether to compute class-wise scores in
+                            addition to macro-averaged scores.
+        :return: a map from score names to values
+        """
+        pred_labels, true_labels, t2pred, marks = self.predict_analyze(data, correct_preds=correct_preds)
+        self.score(pred_labels, true_labels, class_wise, t2pred, marks)
+
+        return self.score_dict
+
+    def predict_dataset(self, data: DataSampler, resolve_preds: bool = True) -> np.ndarray:
+        self.model.eval()
+        predicted_batches = []
+        print(f"Iterating over {len(data)} records in {data.n_batches} batches")
+        for batch in tqdm(data, total=data.n_batches):
+            with torch.no_grad():
+                y_pred, _ = self.get_pred_noupdate(batch)
+                if isinstance(y_pred, dict):
+                    y_pred = y_pred["pred"]
+
+                y_pred = y_pred.detach().cpu().numpy()
+                predicted_batches.append(y_pred)
+
+        preds = np.concatenate(predicted_batches, axis=0)
+        if resolve_preds:
+            return preds.argmax(axis=1)
+
+        return preds
 
     def eval_and_print(self, data=None, data_name=None, class_wise=False, correct_preds=False):
         '''
@@ -443,14 +470,14 @@ class TorchModelHandler:
         return y_pred, labels
 
     def get_pred_noupdate(self, sample_batched):
-        '''
+        """
         Helper function for getting predictions without tracking gradients.
         Used for evaluating the model or getting predictions for other reasons.
         OVERRIDES: super method.
         :param sample_batched: the batch of data samples
         :return: the predictions for the batch (as a tensor) and the true labels
                     for the batch (as a numpy array)
-        '''
+        """
         args = self.batching_fn(sample_batched, **self.batching_kwargs)
 
         with torch.no_grad():
@@ -464,6 +491,6 @@ class TorchModelHandler:
             else:
                 y_pred = self.model(**args)
 
-            labels = args['labels']
+            labels = args["labels"]
 
         return y_pred, labels

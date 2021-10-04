@@ -53,7 +53,7 @@ class StanceData(Dataset):
                  pad_val=0, truncate_data=None, is_bert=False, add_special_tokens=True,
                  **kwargs):
         self.data_name = data_name
-        self.data_file = pd.read_csv(data_name)
+        self.data_file: pd.DataFame = pd.read_csv(data_name)
         if vocab_name != None:
             self.word2i = pickle.load(open(vocab_name, 'rb'))
         self.name = name

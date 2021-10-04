@@ -1,7 +1,13 @@
+import csv
+
+from functools import partial
+
 import sys
 import os
+import traceback
 from tqdm.auto import tqdm
-from typing import List
+from typing import List, Callable, Dict, Any, Tuple, Sequence, Protocol, Union
+from multiprocessing import Pool
 
 import torch
 import numpy as np
@@ -21,17 +27,69 @@ import pickle
 SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(SRC_DIR)
 
-from modeling import datasets, data_utils
+from modeling import data_utils
+from modeling.data_utils import DataSampler
+from modeling.datasets import StanceData
 import modeling.input_models as im
 
-# import datasets, data_utils
+SEED = 4783
+DEFAULT_TOPIC_DIR = "../resources/topicreps"
+EMBEDDING_NAME = "bert_tfidfW"
+DOC_REPR_PREFIX = "bert_tfidfW_doc"
+TOPIC_REPR_PREFIX = "bert_topic"
 
 # type aliases
 Corpus = List[str]
+NamedDataset = Tuple[str, str]
+NamedDataLoader = Tuple[str, DataSampler]
+
+# from typing_extensions import Protocol  # for Python <3.8
+
+class ClusterPredictor(Protocol):
+    def predict(self, X: Sequence) -> Sequence[int]: ...
 
 use_cuda = torch.cuda.is_available()
-SEED = 4783
-DEFAULT_TOPIC_DIR = "../resources/topicreps"
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+
+
+def get_data_sampler(path: str, vocab_name: str = None) -> DataSampler:
+    data = StanceData(path, vocab_name, max_token_len=200,
+                      max_top_len=5, is_bert=True, add_special_tokens=True)
+
+    return DataSampler(data, batch_size=64, shuffle=False)
+
+
+def parse_datasets(datasets_str: str) -> List[Tuple[str, DataSampler]]:
+    """
+    Get the datasets argument and parse it to pairs of name and path to the given datasets.
+    The 'datasets_str' argument consists of pairs of name and path to datasets separated with comman between pairs,
+    where each pair is separated with a colon between the name and the path to the specific dataset.
+
+    'datasets_str' is of the form: name1:path1,name2:path2,...
+    :param datasets_str:
+    :return: a listy of tuple pairs with name as the first argument and the path is the second
+    """
+    datasets = []
+    for dataset in datasets_str.split(","):
+        parts = dataset.split(":")
+        if len(parts) != 2:
+            print(f"Could not parse the pair \"{dataset}\"")
+            print("Skipping")
+            continue
+
+        name, path = parts
+        print(f"Dataset - {name}: {path}")
+        try:
+            sampler = get_data_sampler(path)
+            datasets.append((name, sampler))
+        except Exception as e:
+            print(traceback.format_exc())
+            print(f"Skip dataset \"{name}\" in path: \"{path}\"")
+
+    print(f"Parsed total of {len(datasets)} datasets")
+    return datasets
 
 
 def load_data(train_path: str, id_col="ori_id", text_col="text_s") -> Corpus:
@@ -55,7 +113,7 @@ def load_data(train_path: str, id_col="ori_id", text_col="text_s") -> Corpus:
     return corpus
 
 
-def get_features(corpus: Corpus):
+def get_features(corpus: Corpus) -> Dict[str, float]:
     """
     calculates the idf value of words from corpus.
     :param corpus: sequence of texts.
@@ -67,6 +125,20 @@ def get_features(corpus: Corpus):
     for w, i in vectorizer.vocabulary_.items():
         word2idf[w] = vectorizer.idf_[i]
     return word2idf
+
+
+def store_idf_values(word2idf: Dict[str, float], path: str):
+    with open(path, 'w') as idf_f:
+        writer = csv.writer(idf_f, lineterminator='\n')
+        writer.writerow("word,idf".split(','))
+        writer.writerows(word2idf.items())
+
+
+def load_idf_values(path: str) -> Dict[str, float]:
+    with open(path, 'r') as idf_f:
+        reader = csv.reader(idf_f)
+        next(reader)  # skip header
+        return dict(((word, float(idf)) for word, idf in reader))
 
 
 def combine_word_piece_tokens(word_tokens, word2tfidf):
@@ -113,20 +185,32 @@ def combine_word_piece_tokens(word_tokens, word2tfidf):
     return new_word_tokens
 
 
-def get_tfidf_weights(new_word_tokens, vecs, word2tfidf):
-    tfidf_lst = []
-    for toklst in new_word_tokens:  # word_tokens:
-        temp = []
-        for w in toklst:
-            temp.append(word2tfidf.get(w, 0.))
-        # temp = [word2tfidf[w] for w in toklst if w in word2tfidf]
-        while len(temp) < vecs.shape[1]:  # padding to maxlen
-            temp.append(0)
-        tfidf_lst.append(temp)
-    return tfidf_lst
+def get_tfidf_weights(
+        new_word_tokens: Sequence[Sequence[str]],
+        embeddings: np.ndarray,
+        word2idf: Dict[str, float]
+) -> List[List[float]]:
+    tfidf_list = []
+    for tokens in new_word_tokens:  # word_tokens:
+        idf_values = []
+        for w in tokens:
+            idf_values.append(word2idf.get(w, 0.))
+
+        # padding to maxlen
+        while len(idf_values) < embeddings.shape[1]:
+            idf_values.append(0.)
+        tfidf_list.append(idf_values)
+    return tfidf_list
 
 
-def save_bert_vectors(embed_model, dataloader, batching_fn, batching_kwargs, word2tfidf, topicdir, dataname):
+def save_bert_vectors(
+        embed_model: im.BERTLayer,
+        dataloader: DataSampler,
+        batching_fn: Callable[[List[dict]], Dict[str, Any]],
+        word2tfidf: Dict[str, float],
+        topic_dir: str,
+        dataname: str
+):
     doc_matrix = []
     topic_matrix = []
     doc2i = dict()
@@ -134,29 +218,29 @@ def save_bert_vectors(embed_model, dataloader, batching_fn, batching_kwargs, wor
     didx = 0
     tidx = 0
     for sample_batched in tqdm(dataloader, total=dataloader.n_batches):
-        args = batching_fn(sample_batched, **batching_kwargs)
+        args = batching_fn(sample_batched)
         with torch.no_grad():
             embed_args = embed_model(**args)
             args.update(embed_args)
 
-            vecs = args['txt_E']  # (B, L, 768)
-            word_tokens = [dataloader.data.tokenizer.convert_ids_to_tokens(args['text'][i],
+            embeddings = args["txt_E"]
+            word_tokens = [dataloader.data.tokenizer.convert_ids_to_tokens(args["text"][i],
                                                                            skip_special_tokens=True)
-                           for i in range(args['text'].shape[0])]
+                           for i in range(args["text"].shape[0])]
 
             # join the BERT word-piece tokens
             new_word_tokens = combine_word_piece_tokens(word_tokens, word2tfidf)
 
-            tfidf_lst = get_tfidf_weights(new_word_tokens, vecs, word2tfidf)
+            tfidf_list = get_tfidf_weights(new_word_tokens, embeddings, word2tfidf)
 
-            tfidf_weights = torch.tensor(tfidf_lst, device=('cuda' if use_cuda else 'cpu'))  # (B, L)
-            tfidf_weights = tfidf_weights.unsqueeze(2).repeat(1, 1, vecs.shape[2])
-            weighted_vecs = torch.einsum('blh,blh->blh', vecs, tfidf_weights)
+            tfidf_weights = torch.tensor(tfidf_list, device=('cuda' if use_cuda else 'cpu'))  # (B, L)
+            tfidf_weights = tfidf_weights.unsqueeze(2).repeat(1, 1, embeddings.shape[2])
+            weighted_vecs = torch.einsum('blh,blh->blh', embeddings, tfidf_weights)
 
-            avg_vecs = weighted_vecs.sum(1) / args['txt_l'].unsqueeze(1)
+            avg_vecs = weighted_vecs.sum(1) / args["txt_l"].unsqueeze(1)
 
             doc_vecs = avg_vecs.detach().cpu().numpy()
-            topic_vecs = args['avg_top_E'].detach().cpu().numpy()
+            topic_vecs = args["avg_top_E"].detach().cpu().numpy()
 
         for bi, b in enumerate(sample_batched):
             if b['ori_text'] not in doc2i:
@@ -191,15 +275,13 @@ def save_bert_vectors(embed_model, dataloader, batching_fn, batching_kwargs, wor
         print(f"topic2i [{dataname}] saved to {topic2i_path}")
 
 
-def load_vector_data(p, docname, topicname, dataname, dataloader, mode='concat'):
-    docm = np.load(os.path.join(p, f"{docname}-{dataname}.vecs.npy"))
-    topicm = np.load(os.path.join(p, f"{topicname}-{dataname}.vecs.npy"))
-    doc2i = pickle.load(open(os.path.join(p, f"{docname}-{dataname}.vocab.pkl"), "rb"))
-    topic2i = pickle.load(open(os.path.join(p, f"{topicname}-{dataname}.vocab.pkl"), "rb"))
+def load_vector_data(topic_dir: str, dataname: str, dataloader: DataSampler, mode: str = 'concat'):
+    docm = np.load(os.path.join(topic_dir, f"{DOC_REPR_PREFIX}-{dataname}.vecs.npy"))
+    topicm = np.load(os.path.join(topic_dir, f"{TOPIC_REPR_PREFIX}-{dataname}.vecs.npy"))
+    doc2i = pickle.load(open(os.path.join(topic_dir, f"{DOC_REPR_PREFIX}-{dataname}.vocab.pkl"), "rb"))
+    topic2i = pickle.load(open(os.path.join(topic_dir, f"{TOPIC_REPR_PREFIX}-{dataname}.vocab.pkl"), "rb"))
 
     doc2topics = dict()
-    unique_topics = set()
-
     dataY = dict()
     dataX = []
     idx = -1
@@ -228,187 +310,179 @@ def load_vector_data(p, docname, topicname, dataname, dataloader, mode='concat')
     return np.array(dataX), dataY
 
 
-def cluster(train_X, train_Y, dev_X, dev_Y, k, trial_num, topic_dir, dataname, link_type='ward', m='euclidean'):
-    print("[{}] clustering with: linkage={}, m={}, n_clusters={}...".format(trial_num, link_type, m, k))
+def create_and_save_topic_vectors(
+        datasets: List[Tuple[str, DataSampler]],
+        word2idf: Dict[str, float],
+        topic_dir: str,
+        use_cuda: bool
+):
+    print("Saving vectors")
+    input_layer = im.BERTLayer(mode='text-level', use_cuda=use_cuda)
+    batch_args = {'keep_sen': False}
+    batching_fn = partial(data_utils.prepare_batch, **batch_args)
+
+    for dataset_name, dataloader in datasets:
+        print(f"Get embeddings for dataset {dataset_name} and save results")
+        save_bert_vectors(input_layer, dataloader, batching_fn, word2idf, topic_dir, dataset_name)
+
+
+def cluster(train_X, k, trial_num, link_type="ward", m="euclidean") -> NearestCentroid:
+    print(f"[{trial_num}] clustering with: linkage={link_type}, m={m}, n_clusters={k}...")
     clustering = AgglomerativeClustering(n_clusters=k, linkage=link_type, affinity=m)
-    # clustering = KMeans(n_clusters=k)
     clustering.fit(train_X)
     labels = clustering.labels_
-    print('[{}] finished clustering.'.format(trial_num))
-
-    ## labels: new_id -> cluster_number
-    train_id2i = dict()
-    for rid, eid in train_Y.items():
-        train_id2i[rid] = labels[eid]
-    train_outpath = os.path.join(topic_dir, f"{dataname}_{link_type}_{m}_{k}-train.labels.pkl")
-    with open(train_outpath, 'wb') as out_f:
-        pickle.dump(train_id2i, out_f)
-        print(f"[{trial_num}] saved to {train_outpath}")
+    print(f"[{trial_num}] finished clustering.")
 
     print(f"[{trial_num}] fitting centroid classifier ...")
     clf = NearestCentroid()
     clf.fit(train_X, labels)
     print(f"[{trial_num}] finished fitting classifier.")
+    return clf
 
-    centroids_outpath = os.path.join(topic_dir, f"{dataname}_{link_type}_{m}_{k}.centroids.npy")
+
+def store_cluster_predictor(clf: NearestCentroid, topic_dir: str, k: int, link_type="ward", m="euclidean"):
+    centroids_outpath = os.path.join(topic_dir, f"{EMBEDDING_NAME}_ward_euclidean_{k}.centroids.npy")
     np.save(centroids_outpath, clf.centroids_)
-    print(f"[{trial_num}] saved to {centroids_outpath}")
-
-    dev_labels = clf.predict(dev_X)
-    sse = calculate_sse(clf.centroids_, dev_X, dev_labels)
-    print(f"[{trial_num}] Sum Squared Error: {sse}")
-
-    dev_id2i = dict()
-    for rid, eid in dev_Y.items():
-        dev_id2i[rid] = dev_labels[eid]
-
-    dev_outpath = os.path.join(topic_dir, f"{dataname}_{link_type}_{m}_{k}-dev.labels.pkl")
-    with open(dev_outpath, 'wb') as out_f:
-        pickle.dump(dev_id2i, out_f)
-        print(f"[{trial_num}] saved to {dev_outpath}")
-
-    print()
-    return sse
+    print(f"saved centroids to {centroids_outpath}")
 
 
 def calculate_sse(centroids, dev_X, dev_labels):
-    temp = euclidean_distances(dev_X, centroids)
+    distances = euclidean_distances(dev_X, centroids)
     sse = 0
     for i, l in enumerate(dev_labels):
-        sse += temp[i, l]
+        sse += distances[i, l]
+
     return sse
 
 
-def get_cluster_labels(k, X, Y, topic_dir, embedding_name, data_name):
-    train_centroids = np.load(os.path.join(topic_dir, f"{embedding_name}_ward_euclidean_{k}.centroids.npy"))
-    classes = np.array([i for i in range(len(train_centroids))])
-
-    clf = NearestCentroid()
-    clf.centroids_ = train_centroids
-    clf.classes_ = classes
-
+def measure_sse(clf: NearestCentroid, X):
     labels = clf.predict(X)
-    id2i = dict()
-    for rid, eid in Y.items():
-        id2i[rid] = labels[eid]
+    sse = calculate_sse(clf.centroids_, X, labels)
+    return sse
 
-    outpath = os.path.join(topic_dir, f"{embedding_name}_ward_euclidean_{k}-{data_name}.labels.pkl")
+
+def get_cluster_labels(clf: ClusterPredictor, X: np.ndarray, Y: dict) -> Dict[Any, int]:
+    labels = clf.predict(X)
+    id2cluster = dict()
+    for rid, eid in Y.items():
+        id2cluster[rid] = labels[eid]
+
+    return id2cluster
+
+
+def store_clustered(cluster_mapping: Dict[Any, int], topic_dir: str, k:int, data_name):
+    outpath = os.path.join(topic_dir, f"{EMBEDDING_NAME}_ward_euclidean_{k}-{data_name}.labels.pkl")
     with open(outpath, "wb") as out_f:
-        pickle.dump(id2i, out_f)
+        pickle.dump(cluster_mapping, out_f)
         print(f"saved to {outpath}")
+
+
+def cluster_and_measure(k: int, train_X: np.ndarray, dev_X: np.ndarray) -> float:
+    clf = cluster(train_X, k, k)
+    return measure_sse(clf, dev_X)
+
+
+def find_best_k(train_X: np.ndarray, dev_X: np.ndarray, num_trials: int, min_value: int, max_value: int, n_jobs: int = None) -> Tuple[int, float]:
+    k_values = np.random.randint(min_value, max_value + 1, num_trials)
+
+    scorer = partial(cluster_and_measure, train_X=train_X, dev_X=dev_X)
+    pool = Pool(n_jobs)
+    sse_scores = pool.map(scorer, k_values, chunksize=1)
+
+    # plot results
+    sort_k_indices = np.argsort(k_values)
+    sorted_k = [k_values[i] for i in sort_k_indices]
+    sorted_sse = [sse_scores[i] for i in sort_k_indices]
+    plt.plot(sorted_k, sorted_sse, 'go--')
+    plt.savefig(os.path.join(topic_dir, f"SSE_clusters.png"))
+
+    min_index = np.argmin(sse_scores)
+    return k_values[min_index], sse_scores[min_index]
+
+
+def detect_k(topic_dir: str) -> Union[int, None]:
+    prefix = f"{EMBEDDING_NAME}_ward_euclidean_"
+    for filename in os.listdir(topic_dir):
+        if filename.startswith(prefix):
+            k = filename[len(prefix):].split(".")[0].split("-")[0]
+            return int(k)
+
+    return None
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-m', '--mode', help='What to do', required=True)
-    parser.add_argument('-i', '--train_data', help='Name of the training data file', required=False)
-    parser.add_argument('-d', '--dev_data', help='Name of the dev data file', required=False)
-    parser.add_argument('-e', '--test_data', help='path to the test data file', required=False,
-                        default=None)
-    parser.add_argument('-a', '--test_name', help='Name of the test data file', required=False,
-                        default="test")
+    parser.add_argument('-m', '--mode', type=int, default=1, help='What to do', required=True)
+    parser.add_argument('-d', '--datasets', type=str, help='datasets to process their topics', required=True)
     parser.add_argument('-p', '--data_path', default=DEFAULT_TOPIC_DIR, help='Data path to directory for topic reps')
-    parser.add_argument('-t', '--topic_name', required=False, default='bert_topic')
-    parser.add_argument('-c', '--doc_name', required=False, default='bert_tfidfW_doc')
-    parser.add_argument('-k', '--k', type=int, default=197, help="Number of clusters")
-    parser.add_argument('-v', '--value_range', required=False, help='Range of values for search')
-    parser.add_argument('-n', '--n', help='Num neighbors', required=False)
-    parser.add_argument('-f', '--file_name', help='Name for files', required=False,
-                        default='bert_tfidfW')
-    parser.add_argument('-r', '--num_trials', type=int, help='Number of trials for search')
 
-    args = vars(parser.parse_args())
+    # training arguments
+    parser.add_argument("--train", action="store_const", const=True, default=False,
+                        help='Flag to use the first dataset for training, that is - creating')
+    parser.add_argument('-k', '--k', type=int, default=None, help="Number of clusters to create")
+    parser.add_argument('-v', '--value_range', default="0-500", help='Range of values for search')
+    parser.add_argument('-r', '--num_trials', type=int, default=10, help='Number of trials for search')
+    parser.add_argument('-j', '--num_jobs', type=int, default=os.cpu_count(), help='Number of cores to parallel where possible')
 
-    topic_dir = args["data_path"]
-    data_name = args['file_name']
-    test_name = args["test_name"]
+    args = parser.parse_args()
 
-    torch.manual_seed(SEED)
-    torch.cuda.manual_seed_all(SEED)
-    torch.backends.cudnn.deterministic = True
+    print("Processing all datasets")
+    named_samplers = parse_datasets(args.datasets)
+    topic_dir = args.data_path
+    if not os.path.isdir(topic_dir):
+        os.makedirs(topic_dir)
 
-    data = datasets.StanceData(args['train_data'], None, max_token_len=200, max_top_len=5, is_bert=True,
-                               add_special_tokens=True)
-    dataloader = data_utils.DataSampler(data, batch_size=64, shuffle=False)
+    num_clusters = args.k
+    if num_clusters is None:
+        num_clusters = detect_k(topic_dir)
+    if num_clusters is None:
+        num_clusters = 0
 
-    dev_data = datasets.StanceData(args['dev_data'], None, max_token_len=200,
-                                   max_top_len=5, is_bert=True, add_special_tokens=True)
-    dev_dataloader = data_utils.DataSampler(dev_data, batch_size=64, shuffle=False)
+    train_name, train_data_sampler, dev_name, dev_data_sampler = None, None, None, None
 
-    test_dataloader = None
-    if args['test_data'] is not None:
-        test_data = datasets.StanceData(args['test_data'], None, max_token_len=200,
-                                        max_top_len=5, is_bert=True, add_special_tokens=True)
-        test_dataloader = data_utils.DataSampler(test_data, batch_size=64, shuffle=False)
+    if args.train:
+        train_name, train_data_sampler = named_samplers[0]
+        dev_name, dev_data_sampler = named_samplers[1]
 
-    if args['mode'] == '1':
-        print("Saving vectors")
+    if args.mode <= 1:
+        print("Compute BERT-based representation of topics and documents")
+        idf_path = os.path.join(topic_dir, "idf.csv")
+        if train_data_sampler is not None:
+            print("Load training data")
+            train_path = train_data_sampler.data.data_name
+            corpus = load_data(train_path)
+            print("Create tfidf features")
+            word2idf = get_features(corpus)
+            print(f"Store words' idf values in {idf_path}")
+            store_idf_values(word2idf, idf_path)
 
-        input_layer = im.BERTLayer(mode='text-level', use_cuda=use_cuda)
-        setup_fn = data_utils.setup_helper_bert_ffnn
-        batching_fn = data_utils.prepare_batch
-        batch_args = {'keep_sen': False}
+        word2idf = load_idf_values(idf_path)
+        create_and_save_topic_vectors(named_samplers, word2idf, topic_dir, use_cuda=use_cuda)
 
-        print("Load training data")
-        corpus = load_data(args['train_data'])
-
-        print("Create tfidf features")
-        word2tfidf = get_features(corpus)
-
-        save_bert_vectors(input_layer, dataloader, batching_fn, batch_args, word2tfidf, topic_dir, 'train')
-        save_bert_vectors(input_layer, dev_dataloader, batching_fn, batch_args, word2tfidf, topic_dir, 'dev')
-
-        if args['test_data'] is not None:
-            save_bert_vectors(input_layer, test_dataloader, batching_fn, batch_args, word2tfidf, topic_dir, test_name)
-
-    elif args['mode'] == '2':
-        print("Clustering")
-        train_X, train_Y = load_vector_data(topic_dir, docname=args['doc_name'], topicname=args['topic_name'],
-                                            dataname='train', dataloader=dataloader, mode='concat')
-        dev_X, dev_Y = load_vector_data(topic_dir, docname=args['doc_name'], topicname=args['topic_name'],
-                                        dataname='dev', dataloader=dev_dataloader, mode='concat')
-        if args['k'] == 0:
-            min_v, max_v = args['value_range'].split('-')
-            tried_v = set()
-            sse_lst = []
-            k_lst = []
-
-
-            def choose_random_k():
-                return np.random.randint(int(min_v), int(max_v) + 1)
-
-
-            for trial_num in range(args['num_trials']):
-                while (k := choose_random_k()) in trial_num: pass
-
-                sse = cluster(train_X, train_Y, dev_X, dev_Y, k, trial_num, topic_dir, data_name)
-                sse_lst.append(sse)
-                k_lst.append(k)
-
-                tried_v.add(k)
-
-            sort_k_indices = np.argsort(k_lst)
-            sorted_k = [k_lst[i] for i in sort_k_indices]
-            sorted_sse = [sse_lst[i] for i in sort_k_indices]
-            plt.plot(sorted_k, sorted_sse, 'go--')
-            plt.savefig(os.path.join(topic_dir, f"SSE_clusters_{data_name}.png"))
+    if args.mode <= 2:
+        if num_clusters == 0:
+            print("Perform clustering")
+            print("Searching for the best 'k' value")
+            train_X, _ = load_vector_data(topic_dir, dataname=train_name, dataloader=train_data_sampler, mode='concat')
+            dev_X, _ = load_vector_data(topic_dir, dataname=dev_name, dataloader=dev_data_sampler, mode='concat')
+            min_value, max_value = tuple(map(int, args.value_range.split('-')))
+            num_clusters, score = find_best_k(train_X, dev_X, args.num_trials, min_value, max_value, n_jobs=args.num_jobs)
+            print(f"Done! Best number of clusters: {num_clusters} with SSE score of {score}")
+            clf = cluster(train_X, num_clusters, 0)
+            store_cluster_predictor(clf, topic_dir, num_clusters)
         else:
-            cluster(train_X, train_Y, dev_X, dev_Y, args['k'], 0, topic_dir, data_name)
+            print(f"Number of clustered was already determined: {num_clusters}")
 
-    elif args['mode'] == '3':
+    if args.mode <= 3:
         print("Getting cluster assignments")
-        embedding_name = "bert_tfidfW"
-        X, Y = load_vector_data(topic_dir, docname=args['doc_name'], topicname=args['topic_name'],
-                                dataname='train', dataloader=dataloader, mode='concat')
-        get_cluster_labels(args['k'], X, Y, topic_dir, embedding_name, 'train')
+        clf = NearestCentroid()
+        clf.centroids_ = np.load(os.path.join(topic_dir, f"{EMBEDDING_NAME}_ward_euclidean_{num_clusters}.centroids.npy"))
+        clf.classes_ = np.arange(len(clf.centroids_))
 
-        X, Y = load_vector_data(topic_dir, docname=args['doc_name'], topicname=args['topic_name'],
-                                dataname='dev', dataloader=dev_dataloader, mode='concat')
-        get_cluster_labels(args['k'], X, Y, topic_dir, embedding_name, 'dev')
-
-        X, Y = load_vector_data(topic_dir, docname=args['doc_name'], topicname=args['topic_name'],
-                                dataname=test_name, dataloader=test_dataloader, mode='concat')
-        get_cluster_labels(args['k'], X, Y, topic_dir, embedding_name, test_name)
+        for data_name, data_sampler in named_samplers:
+            X, Y = load_vector_data(topic_dir, dataname=data_name, dataloader=data_sampler, mode='concat')
+            clusters = get_cluster_labels(clf, X, Y)
+            store_clustered(clusters, topic_dir, num_clusters, data_name)
 
     else:
-        print("doing nothing.")
+        print(f"doing nothing: mode={args.mode}")
