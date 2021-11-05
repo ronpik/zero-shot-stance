@@ -168,7 +168,7 @@ class JointBERTLayerWithExtra(torch.nn.Module):
             item_masks = item_masks.to('cuda')
             token_type_ids = token_type_ids.to('cuda')
 
-        last_hidden, _ = self.bert_layer(input_ids=item_ids,attention_mask=item_masks,
+        last_hidden, _ = self.bert_layer(input_ids=item_ids, attention_mask=item_masks,
                                          token_type_ids=token_type_ids)
         full_masks = item_masks.unsqueeze(2).repeat(1, 1, last_hidden.shape[2])
         masked_last_hidden = torch.einsum('blh,blh->blh', last_hidden, full_masks)
